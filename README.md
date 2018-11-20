@@ -1,10 +1,7 @@
-Automatically exported from [code.google.com/p/libvt100](code.google.com/p/libvt100)
+Starting with the fine generic library from https://github.com/taterbase/libvt100
 
-Description from original author:
->*A purely .net/C# library for parsing a VT100/ANSI stream*
+Ultimately this will be a general terminal tool for the VR libraries for the VRWorld's Browser.
 
->When writing anything that needs to communicate with a terminal in some way it is almost always speaking some dialect of VT100 or ANSI.
+Starting off with a simple Windows.Forms terminal tool and libssh to make a putty/ssh like tool.  Eventually want to get libvt100 to the point where it's pretty much fully xterm compatible, and has some other features I'd like to see.
 
->This library aims solely at parsing a stream of VT100/ANSI data and then letting the host application do the rendering. Many other project also parse VT100/ANSI data but their parser is always tangled up with the actual rendering of the data, making reuse in other projects problematic.
-
->Hopefully other projects will start using libvt100 and we can stop reinventing the wheel in each project.
+Then another client will be written to actually allow this to work in Unity3D.
