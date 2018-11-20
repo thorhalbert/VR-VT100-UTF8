@@ -3,3 +3,13 @@
 ################################################################################
 
 *.lock
+/.vs/libvt100/v15/Server/sqlite3
+/.vs/libvt100/v15
+/build/Debug
+/build
+/packages/SSH.NET.2016.1.0
+/VRTermDev/bin/Debug
+/VRTermDev/obj/Debug
+/vt100render/obj/Debug
+/.vs/VR-VT100-UTF8/v15
+/packages/NUnit.3.11.0
