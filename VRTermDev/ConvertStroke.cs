@@ -114,6 +114,13 @@ namespace VRTermDev
 
             // Function Keys
             // Arrows/Home
+            _americanKeyboard.Add(Keys.Up , new byte[] { ESC, (int) '[', (int)'A' });
+            _americanKeyboard.Add(Keys.Down, new byte[] { ESC, (int)'[', (int)'B' });
+            _americanKeyboard.Add(Keys.Right, new byte[] { ESC, (int)'[', (int)'C' });
+            _americanKeyboard.Add(Keys.Left, new byte[] { ESC, (int)'[', (int)'D' });
+
+            _americanKeyboard.Add(Keys.Home, new byte[] { ESC, (int)'[', (int)'H' });
+            _americanKeyboard.Add(Keys.End, new byte[] { ESC, (int)'[', (int)'F' });
             // Keypad
         }
 

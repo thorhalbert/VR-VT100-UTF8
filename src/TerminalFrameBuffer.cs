@@ -6,12 +6,10 @@ using System.Collections.Generic;
 
 namespace libVT100
 {
-    public class TerminalFrameBuffer : IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Character>
+    public class TerminalFrameBuffer : IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Glyph>
     {
-        public static bool DoAsserts
-        {
-            get; set;
-        }
+        #region Define Enums
+
         public enum Blink
         {
             None = 0,
@@ -60,6 +58,21 @@ namespace libVT100
             Conceal = 128,
         }
 
+        #endregion
+        #region Define Class Variables
+
+        // Settings/Debug
+        public static bool DoAsserts { get; set; }
+
+        // Protected
+        protected Point m_cursorPosition;
+        protected Point m_savedCursorPosition;
+        protected bool m_showCursor;
+        protected Glyph[,] m_screen;
+        protected GraphicAttributes m_currentAttributes;
+
+        #endregion
+        #region UI Actions Messages
         public event Action<List<UIActions>> OnUIAction;
         private static List<UIActions> UIActionQueue = new List<UIActions>();
         private static object _actionLock = new object();   // We're likely multithreaded here from the inputs coming in from sshshell
@@ -95,9 +108,9 @@ namespace libVT100
 
         public class UIAction_ScrollScreenUp : UIActions
         {
-            public Character[] SaveRow { get; }
+            public Glyph[] SaveRow { get; }
 
-            public UIAction_ScrollScreenUp(Character[] saveRow) : base(ActionTypes.SrollScreenUp)
+            public UIAction_ScrollScreenUp(Glyph[] saveRow) : base(ActionTypes.SrollScreenUp)
             {
                 SaveRow = saveRow;
             }
@@ -105,7 +118,7 @@ namespace libVT100
 
         public class UIAction_UpdateScreen : UIActions
         {
-            public UIAction_UpdateScreen(int column, int row, Character glyph) : base(ActionTypes.UpdateScreen)
+            public UIAction_UpdateScreen(int column, int row, Glyph glyph) : base(ActionTypes.UpdateScreen)
             {
                 this.Column = column;
                 this.Row = row;
@@ -114,7 +127,12 @@ namespace libVT100
 
             public int Column { get; }
             public int Row { get; }
-            public Character Glyph { get; }
+            public Glyph Glyph { get; }
+        }
+
+        public Glyph GetGlyph(int x, int y)
+        {
+            return this[x, y];
         }
 
         public class UIAction_CursorMoved : UIActions
@@ -145,6 +163,8 @@ namespace libVT100
             queue.Clear();
         }
 
+        #endregion
+        #region GraphicsAttributes
         public struct GraphicAttributes
         {
             public GraphicAttributeElements Elements { get; private set; }
@@ -337,8 +357,10 @@ namespace libVT100
                 Background = TextColor.Black;
             }
         }
+        #endregion
+        #region Subclass Glyph (Cell entity)
 
-        public class Character
+        public class Glyph
         {
             private char m_char;
             private GraphicAttributes m_graphicAttributes;
@@ -367,30 +389,33 @@ namespace libVT100
                 }
             }
 
-            public Character()
+            public Glyph()
                 : this(' ')
             {
             }
 
-            public Character(char _char)
+            public Glyph(char _char)
             {
                 m_char = _char;
                 m_graphicAttributes = new GraphicAttributes();
             }
 
-            public Character(char _char, GraphicAttributes _attribs)
+            public Glyph(char _char, GraphicAttributes _attribs)
             {
                 m_char = _char;
                 m_graphicAttributes = _attribs;
             }
 
+            public void Invert()
+            {
+                var back = m_graphicAttributes.Background;
+                m_graphicAttributes.Background = m_graphicAttributes.Foreground;
+                m_graphicAttributes.Foreground = back;
+            }
         }
 
-        protected Point m_cursorPosition;
-        protected Point m_savedCursorPosition;
-        protected bool m_showCursor;
-        protected Character[,] m_screen;
-        protected GraphicAttributes m_currentAttributes;
+        #endregion
+        #region Misc Frame Parameters
 
         public Size Size
         {
@@ -402,12 +427,12 @@ namespace libVT100
             {
                 if (m_screen == null || value.Width != Width || value.Height != Height)
                 {
-                    m_screen = new Character[value.Width, value.Height];
+                    m_screen = new Glyph[value.Width, value.Height];
                     for (int x = 0; x < Width; ++x)
                     {
                         for (int y = 0; y < Height; ++y)
                         {
-                            m_screen[x, y] = new Character();  // Don't let this do callbacks
+                            m_screen[x, y] = new Glyph();  // Don't let this do callbacks
                         }
                     }
                     CursorPosition = new Point(0, 0);
@@ -453,7 +478,7 @@ namespace libVT100
 
 
 
-        public Character this[int _column, int _row]
+        public Glyph this[int _column, int _row]
         {
             get
             {
@@ -473,7 +498,7 @@ namespace libVT100
             }
         }
 
-        public Character this[Point _position]
+        public Glyph this[Point _position]
         {
             get
             {
@@ -484,6 +509,9 @@ namespace libVT100
                 this[_position.X, _position.Y] = value;
             }
         }
+
+        #endregion
+        #region Constructor and Maintenance Functions
 
         public TerminalFrameBuffer(int _width, int _height)
         {
@@ -544,6 +572,30 @@ namespace libVT100
             }
         }
 
+        public override String ToString()
+        {
+            StringBuilder builder = new StringBuilder();
+            for (int y = 0; y < Height; ++y)
+            {
+                for (int x = 0; x < Width; ++x)
+                {
+                    if (this[x, y].Char > 127)
+                    {
+                        builder.Append('!');
+                    }
+                    else
+                    {
+                        builder.Append(this[x, y].Char);
+                    }
+                }
+                builder.Append(Environment.NewLine);
+            }
+            return builder.ToString();
+        }
+
+        #endregion
+        #region Basic Cursor Movement and Scrolling
+
         protected void CheckColumnRow(int _column, int _row)
         {
             if (_column >= Width)
@@ -590,7 +642,7 @@ namespace libVT100
         {
             // Save the top line
 
-            var keepScroll = new Character[Width];
+            var keepScroll = new Glyph[Width];
             for (var col = 0; col < Width; col++)
                 keepScroll[col] = m_screen[col, 0];
 
@@ -601,7 +653,7 @@ namespace libVT100
                     m_screen[col, row - 1] = m_screen[col, row];
 
             for (var col = 0; col < Width; col++)
-                m_screen[col, Height - 1] = new Character();
+                m_screen[col, Height - 1] = new Glyph();
 
             new UIAction_ScrollScreenUp(keepScroll);
         }
@@ -629,28 +681,9 @@ namespace libVT100
             CursorPosition = new Point(m_cursorPosition.X, m_cursorPosition.Y - 1);
         }
 
-        public override String ToString()
-        {
-            StringBuilder builder = new StringBuilder();
-            for (int y = 0; y < Height; ++y)
-            {
-                for (int x = 0; x < Width; ++x)
-                {
-                    if (this[x, y].Char > 127)
-                    {
-                        builder.Append('!');
-                    }
-                    else
-                    {
-                        builder.Append(this[x, y].Char);
-                    }
-                }
-                builder.Append(Environment.NewLine);
-            }
-            return builder.ToString();
-        }
-
-        IEnumerator<TerminalFrameBuffer.Character> IEnumerable<TerminalFrameBuffer.Character>.GetEnumerator()
+        #endregion
+        #region Buffer Enumerators
+        IEnumerator<TerminalFrameBuffer.Glyph> IEnumerable<TerminalFrameBuffer.Glyph>.GetEnumerator()
         {
             for (int y = 0; y < Height; ++y)
             {
@@ -663,9 +696,10 @@ namespace libVT100
 
         IEnumerator IEnumerable.GetEnumerator()
         {
-            return (this as IEnumerable<TerminalFrameBuffer.Character>).GetEnumerator();
+            return (this as IEnumerable<TerminalFrameBuffer.Glyph>).GetEnumerator();
         }
-
+        #endregion
+        #region Implement IAnsiDecoderClient
         void IAnsiDecoderClient.Characters(IAnsiDecoder _sender, char[] _chars)
         {
             foreach (char ch in _chars)
@@ -673,7 +707,7 @@ namespace libVT100
                 if (ch >= 32)
                 {
 
-                    this[CursorPosition] = new Character(ch, m_currentAttributes); ;
+                    this[CursorPosition] = new Glyph(ch, m_currentAttributes); ;
                     CursorForward();
                     return;
                 }
@@ -691,7 +725,7 @@ namespace libVT100
                     case '\t':      // Tab
                         while (CursorPosition.X % 8 != 0)
                         {
-                            this[CursorPosition] = new Character(ch, m_currentAttributes); ;
+                            this[CursorPosition] = new Glyph(ch, m_currentAttributes); ;
                             CursorForward();
                         }
                         return;
@@ -801,21 +835,21 @@ namespace libVT100
                 case ClearDirection.Forward:
                     for (int x = m_cursorPosition.X; x < Width; ++x)
                     {
-                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
+                        this[x, m_cursorPosition.Y] = new Glyph(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
 
                 case ClearDirection.Backward:
                     for (int x = m_cursorPosition.X; x >= 0; --x)
                     {
-                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
+                        this[x, m_cursorPosition.Y] = new Glyph(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
 
                 case ClearDirection.Both:
                     for (int x = 0; x < Width; ++x)
                     {
-                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
+                        this[x, m_cursorPosition.Y] = new Glyph(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
             }
@@ -1031,10 +1065,12 @@ namespace libVT100
                 }
             }
         }
-
+        #endregion
+        #region Misc
         void IDisposable.Dispose()
         {
             m_screen = null;
         }
+        #endregion
     }
 }

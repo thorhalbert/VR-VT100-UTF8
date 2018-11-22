@@ -103,5 +103,8 @@
       <Name>libvt100</Name>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="xterm_sequences.txt" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

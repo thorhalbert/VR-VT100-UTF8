@@ -22,6 +22,7 @@ namespace VRTermDev
         private Rectangle terminalRectangle;
         private Bitmap terminalCanvasBitmap;
         private Graphics terminalCanvasBitmapGraphic;
+        private Timer timer;
 
         public TerminalCanvas()
         {
@@ -38,6 +39,7 @@ namespace VRTermDev
             timer.Start();
         }
 
+        #region Manage Control Changes
         private void Timer_Tick(object sender, EventArgs e)
         {
             try
@@ -81,7 +83,6 @@ namespace VRTermDev
 
         protected override void OnPaint(PaintEventArgs pe)
         {
-            base.OnPaint(pe);
             // Dump our frame buffer bitmap to the screen (double-buffered hopefully)
 
             if (terminalCanvasBitmap != null)
@@ -90,8 +91,21 @@ namespace VRTermDev
             // Paint the cursor (if any)
             if (!cursorIsVisible) return;
 
+            // For now, we just draw the character inverted
+
+            var glyph = BoundScreen.GetGlyph(cursorCurrent.X, cursorCurrent.Y);
+
+            glyph.Invert();
+
+            var glyphMap = getGlyph(glyph.Attributes.BackgroundColor,
+            glyph.Attributes.ForegroundColor,
+            glyph.Attributes.Elements,
+            glyph.Char);
+
             var cursorRect = new Rectangle(new Point(cursorCurrent.X * charWidth, cursorCurrent.Y * charHeight), charSize);
-            Cursors.IBeam.DrawStretched(pe.Graphics, cursorRect);
+            pe.Graphics.DrawImage((Image) glyphMap, cursorRect);
+
+            base.OnPaint(pe);
         }
 
         protected override void OnSizeChanged(EventArgs e)
@@ -101,6 +115,12 @@ namespace VRTermDev
             buildBuffer();
 
             base.OnSizeChanged(e);
+        }
+
+        // Hopefully this lets us trap the tab
+        protected override bool IsInputKey(Keys keyData)
+        {
+            return true; // base.IsInputKey(keyData);
         }
 
         private void buildBuffer()
@@ -134,7 +154,7 @@ namespace VRTermDev
 
             BoundScreen.DoRefresh(false);
         }
-
+        #endregion
 
         #region Action Handlers for Frame Buffer
         private void BoundScreen_OnUIAction(List<TerminalFrameBuffer.UIActions> actions)
@@ -182,20 +202,7 @@ namespace VRTermDev
             this.Invalidate();
         }
 
-        private static Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
-
-        private static SolidBrush _getSolid(Color c)
-        {
-            if (_brushCache.TryGetValue(c, out SolidBrush brush))
-                return brush;
-
-            brush = new SolidBrush(c);
-            _brushCache.Add(c, brush);
-
-            return brush;
-        }
-
-        private void BoundScreen_ScreenScrollsUp(TerminalFrameBuffer.Character[] obj)
+        private void BoundScreen_ScreenScrollsUp(TerminalFrameBuffer.Glyph[] obj)
         {
             // We have to clip our bitmap and repaint it - nearly impossible in base gdi+
 
@@ -212,7 +219,69 @@ namespace VRTermDev
             terminalCanvasBitmapGraphic.FillRectangle(_getSolid(Color.Black), blankRect);
         }
 
+        private void BoundScreen_OnScreenChanged(int column, int row, TerminalFrameBuffer.Glyph inChar)
+        {
+            if (inChar.Char < 32)
+                return;    // So far see BEL
+
+            var glyphMap = getGlyph(inChar.Attributes.BackgroundColor,
+                inChar.Attributes.ForegroundColor,
+                inChar.Attributes.Elements,
+                inChar.Char);
+
+            Rectangle rect = new Rectangle(new Point(column * charWidth, row * charHeight), charSize);
+
+            terminalCanvasBitmapGraphic.DrawImage((Image)glyphMap, rect);
+        }
+
+        bool cursorIsVisible = false;
+        Point cursorCurrent;
+
+        private void BoundScreen_OnCursorChanged(Point cursorPosition, bool showCursor)
+        {
+            cursorIsVisible = showCursor;
+            cursorCurrent = cursorPosition;
+        }
+        #endregion
+
+        #region Cache Managers
+        private static Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
+        public Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>, Bitmap> glyphCache = new Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, char>, Bitmap>();
         public Dictionary<TerminalFrameBuffer.GraphicAttributeElements, Font> fontCache = new Dictionary<TerminalFrameBuffer.GraphicAttributeElements, Font>();
+
+        private static SolidBrush _getSolid(Color c)
+        {
+            if (_brushCache.TryGetValue(c, out SolidBrush brush))
+                return brush;
+
+            brush = new SolidBrush(c);
+            _brushCache.Add(c, brush);
+
+            return brush;
+        }
+
+        public Bitmap getGlyph(Color BGColor, Color FGColor, TerminalFrameBuffer.GraphicAttributeElements Elements, Char glyph)
+        {
+            var key = new Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>(BGColor, FGColor, Elements, glyph);
+            if (glyphCache.TryGetValue(key, out Bitmap bits))
+                return bits;
+
+            Rectangle rect = new Rectangle(new Point(0, 0), charSize);
+            bits = new Bitmap(charSize.Width, charSize.Height, terminalCanvasBitmapGraphic);
+            using (var gr = Graphics.FromImage((Image)bits))
+            {
+                gr.FillRectangle(_getSolid(BGColor), rect);
+
+                if (!fontCache.TryGetValue(Elements, out Font procFont))
+                    procFont = buildFont(Elements);
+
+                String text = new String(glyph, 1);
+                gr.DrawString(text, procFont, _getSolid(FGColor), rect, StringFormat.GenericTypographic);
+            }
+
+            glyphCache.Add(key, bits);
+            return bits;
+        }
 
         private Font buildFont(TerminalFrameBuffer.GraphicAttributeElements Elements)
         {
@@ -259,58 +328,9 @@ namespace VRTermDev
             return _font;
         }
 
-        public Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>, Bitmap> glyphCache = new Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, char>, Bitmap>();
-        private Timer timer;
-
-        public Bitmap getGlyph(Color BGColor, Color FGColor, TerminalFrameBuffer.GraphicAttributeElements Elements, Char glyph)
-        {
-            var key = new Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>(BGColor, FGColor, Elements, glyph);
-            if (glyphCache.TryGetValue(key, out Bitmap bits))
-                return bits;
-
-            Rectangle rect = new Rectangle(new Point(0, 0), charSize);
-            bits = new Bitmap(charSize.Width, charSize.Height, terminalCanvasBitmapGraphic);
-            using (var gr = Graphics.FromImage((Image)bits))
-            {
-                gr.FillRectangle(_getSolid(BGColor), rect);
-
-                if (!fontCache.TryGetValue(Elements, out Font procFont))
-                    procFont = buildFont(Elements);
-
-                String text = new String(glyph, 1);
-                gr.DrawString(text, procFont, _getSolid(FGColor), rect, StringFormat.GenericTypographic);
-            }
-
-            glyphCache.Add(key, bits);
-            return bits;
-        }
-
-        private void BoundScreen_OnScreenChanged(int column, int row, TerminalFrameBuffer.Character inChar)
-        {
-            if (inChar.Char < 32)
-                return;    // So far see BEL
-
-            var glyphMap = getGlyph(inChar.Attributes.BackgroundColor,
-                inChar.Attributes.ForegroundColor,
-                inChar.Attributes.Elements,
-                inChar.Char);
-
-            Rectangle rect = new Rectangle(new Point(column * charWidth, row * charHeight), charSize);
-
-            terminalCanvasBitmapGraphic.DrawImage((Image)glyphMap, rect);
-        }
-
-        bool cursorIsVisible = false;
-        Point cursorCurrent;
-
-        private void BoundScreen_OnCursorChanged(Point cursorPosition, bool showCursor)
-        {
-            cursorIsVisible = showCursor;
-            cursorCurrent = cursorPosition;
-        }
         #endregion
 
-
+        #region Misc Interfaces
         public void BeginInit()
         {
 
@@ -320,5 +340,6 @@ namespace VRTermDev
         {
 
         }
+        #endregion
     }
 }
