@@ -6,9 +6,11 @@ using System.Collections.Generic;
 
 namespace libVT100
 {
-    public class TerminalFrameBuffer: IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Character>
+    public class TerminalFrameBuffer : IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Character>
     {
-        public static bool DoAsserts { get; set;
+        public static bool DoAsserts
+        {
+            get; set;
         }
         public enum Blink
         {
@@ -58,21 +60,89 @@ namespace libVT100
             Conceal = 128,
         }
 
-        public class UIActions
+        public event Action<List<UIActions>> OnUIAction;
+        private static List<UIActions> UIActionQueue = new List<UIActions>();
+        private static object _actionLock = new object();   // We're likely multithreaded here from the inputs coming in from sshshell
+
+        public abstract class UIActions
         {
             public enum ActionTypes
             {
-                ClearScreen
+                ClearScreen,
+                SrollScreenUp,
+                UpdateScreen,
+                CursorMoved,
             }
 
-            public ActionTypes Action { get; set; }
-            public bool Handled { get; set; }
+            public ActionTypes Action { get; }
 
             public UIActions(ActionTypes _type)
             {
                 Action = _type;
-                Handled = false;
+                lock (_actionLock)
+                {
+                    UIActionQueue.Add(this);
+                }
             }
+        }
+
+        public class UIAction_ClearScreen : UIActions
+        {
+            public UIAction_ClearScreen() : base(ActionTypes.ClearScreen)
+            {
+            }
+        }
+
+        public class UIAction_ScrollScreenUp : UIActions
+        {
+            public Character[] SaveRow { get; }
+
+            public UIAction_ScrollScreenUp(Character[] saveRow) : base(ActionTypes.SrollScreenUp)
+            {
+                SaveRow = saveRow;
+            }
+        }
+
+        public class UIAction_UpdateScreen : UIActions
+        {
+            public UIAction_UpdateScreen(int column, int row, Character glyph) : base(ActionTypes.UpdateScreen)
+            {
+                this.Column = column;
+                this.Row = row;
+                this.Glyph = glyph;
+            }
+
+            public int Column { get; }
+            public int Row { get; }
+            public Character Glyph { get; }
+        }
+
+        public class UIAction_CursorMoved : UIActions
+        {
+            public UIAction_CursorMoved(int column, int row, bool showCursor) : base(ActionTypes.CursorMoved)
+            {
+                this.Column = column;
+                this.Row = row;
+                this.ShowCursor = showCursor;
+            }
+
+            public int Column { get; }
+            public int Row { get; }
+            public bool ShowCursor { get; }
+        }
+
+        public void ActionFlush()
+        {
+            if (UIActionQueue.Count < 1) return;
+
+            List<UIActions> queue = null;
+            lock (_actionLock)
+            {
+                queue = UIActionQueue;
+                UIActionQueue = new List<UIActions>();
+            }
+            OnUIAction?.Invoke(queue);
+            queue.Clear();
         }
 
         public struct GraphicAttributes
@@ -241,8 +311,8 @@ namespace libVT100
                     case TextColor.BrightWhite:
                         return Color.Gray;
                 }
-                if (TerminalFrameBuffer.DoAsserts)  
-                throw new ArgumentOutOfRangeException("_textColor", "Unknown color value.");
+                if (TerminalFrameBuffer.DoAsserts)
+                    throw new ArgumentOutOfRangeException("_textColor", "Unknown color value.");
                 return Color.Transparent;
             }
 
@@ -361,7 +431,6 @@ namespace libVT100
             }
         }
 
-        public event Action<Point, bool> OnCursorChanged;
 
         public Point CursorPosition
         {
@@ -377,14 +446,12 @@ namespace libVT100
 
                     m_cursorPosition = value;
 
-                    OnCursorChanged?.Invoke(m_cursorPosition, m_showCursor);
+                    new UIAction_CursorMoved(value.X, value.Y, m_showCursor);
                 }
             }
         }
 
-        public event Action<UIActions> OnUIAction;
 
-        public event Action<int, int, Character> OnScreenChanged;
 
         public Character this[int _column, int _row]
         {
@@ -400,7 +467,9 @@ namespace libVT100
 
                 m_screen[_column, _row] = value;
 
-                OnScreenChanged?.Invoke(_column, _row, value);
+                new UIAction_UpdateScreen(_column, _row, value);
+
+                new UIAction_UpdateScreen(_column, _row, value);
             }
         }
 
@@ -448,11 +517,7 @@ namespace libVT100
             m_savedCursorPosition = Point.Empty;
             m_currentAttributes.Reset();
 
-            var handler = new UIActions(UIActions.ActionTypes.ClearScreen);
-            OnUIAction?.Invoke(handler);
-
-            if (!handler.Handled)  // If the client handled, then we don't have to do it
-                DoRefresh(true);
+            new UIAction_ClearScreen();
         }
 
         public void DoRefresh(bool sendWhite)
@@ -466,14 +531,14 @@ namespace libVT100
                 {
                     var c = this[x, y];
                     if (sendWhite)
-                        OnScreenChanged?.Invoke(x, y, c);
+                        new UIAction_UpdateScreen(x, y, c);
                     else
                     {
                         var white = (c.Char == ' ');
                         if (c.Attributes.Background != TextColor.Black)
                             white = false;
                         if (!white)
-                            OnScreenChanged?.Invoke(x, y, c);
+                            new UIAction_UpdateScreen(x, y, c);
                     }
                 }
             }
@@ -521,9 +586,6 @@ namespace libVT100
             }
         }
 
-        // Get the client to scroll - thrashing the buffers is too slow
-        public event Action<Character[]> ScreenScrollsUp;
-
         private void ScrollDownOne()
         {
             // Save the top line
@@ -541,7 +603,7 @@ namespace libVT100
             for (var col = 0; col < Width; col++)
                 m_screen[col, Height - 1] = new Character();
 
-            ScreenScrollsUp?.Invoke(keepScroll);
+            new UIAction_ScrollScreenUp(keepScroll);
         }
 
         public void CursorDown()
@@ -767,7 +829,7 @@ namespace libVT100
 
         void IAnsiDecoderClient.ScrollPageDownwards(IAnsiDecoder _sender, int _linesToScroll)
         {
-          
+
         }
 
         void IAnsiDecoderClient.ModeChanged(IAnsiDecoder _sender, AnsiMode _mode)
@@ -783,7 +845,7 @@ namespace libVT100
                     break;
             }
 
-            OnCursorChanged?.Invoke(m_cursorPosition, m_showCursor);
+            new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
         }
 
         Point IAnsiDecoderClient.GetCursorPosition(IAnsiDecoder _sender)

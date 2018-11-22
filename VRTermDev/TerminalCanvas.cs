@@ -30,9 +30,25 @@ namespace VRTermDev
             // SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
-            // Turns out that scrolling in gdi+ is really hard!
+            timer = new Timer
+            {
+                Interval = 200
+            };
+            timer.Tick += Timer_Tick;
+            timer.Start();
+        }
 
-            // this.DoubleBuffered = true;
+        private void Timer_Tick(object sender, EventArgs e)
+        {
+            try
+            {
+                if (BoundScreen != null)
+                    BoundScreen.ActionFlush();
+            }
+            finally
+            {
+                timer.Start();
+            }
         }
 
         private bool initCalled = false;
@@ -50,30 +66,120 @@ namespace VRTermDev
             if (!initCalled)
             {
                 // Only do this once - Init can be called multiple times if needed
-                BoundScreen.OnCursorChanged += BoundScreen_OnCursorChanged;
-                BoundScreen.OnScreenChanged += BoundScreen_OnScreenChanged;
-                BoundScreen.ScreenScrollsUp += BoundScreen_ScreenScrollsUp;
                 BoundScreen.OnUIAction += BoundScreen_OnUIAction;
             }
 
             buildBuffer();
 
             initCalled = true;
-
-
         }
 
-        private void BoundScreen_OnUIAction(TerminalFrameBuffer.UIActions action)
+        protected override void OnPaintBackground(PaintEventArgs e)
         {
-            switch (action.Action)
+            base.OnPaintBackground(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs pe)
+        {
+            base.OnPaint(pe);
+            // Dump our frame buffer bitmap to the screen (double-buffered hopefully)
+
+            if (terminalCanvasBitmap != null)
+                pe.Graphics.DrawImage((Image)terminalCanvasBitmap, 0, 0);
+
+            // Paint the cursor (if any)
+            if (!cursorIsVisible) return;
+
+            var cursorRect = new Rectangle(new Point(cursorCurrent.X * charWidth, cursorCurrent.Y * charHeight), charSize);
+            Cursors.IBeam.DrawStretched(pe.Graphics, cursorRect);
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            if (DesignMode) return;
+
+            buildBuffer();
+
+            base.OnSizeChanged(e);
+        }
+
+        private void buildBuffer()
+        {
+            var tSize = this.Size;
+
+            if (tSize.Height < 1) return;
+            if (TerminalFont == null) return;
+
+            var tmpG = this.CreateGraphics();
+            terminalCanvasBitmap = new Bitmap(tSize.Width, tSize.Height, tmpG);
+
+            terminalCanvasBitmapGraphic = Graphics.FromImage((Image)terminalCanvasBitmap); ;
+            var charS = terminalCanvasBitmapGraphic.MeasureString("M", TerminalFont);
+
+            charWidth = Convert.ToInt32(charS.Width + .5) - 6;  // This is HACK!  Need to figure out how to deal with font margins
+            charHeight = Convert.ToInt32(charS.Height + .5);
+            charSize = new Size(charWidth, charHeight);
+
+            termWidth = tSize.Width / charWidth;
+            termHeight = tSize.Height / charHeight;
+
+            terminalRectangle = new Rectangle(new Point(0, 0), new Size(termWidth * charWidth, termHeight * charHeight));
+
+            if (BoundScreen.Width != termWidth ||
+                BoundScreen.Height != termHeight)
             {
-                case TerminalFrameBuffer.UIActions.ActionTypes.ClearScreen:
-                    terminalCanvasBitmapGraphic.FillRectangle(_getSolid(Color.Black), terminalRectangle);
-                    action.Handled = true;
-                    break;
-                default:
-                    throw new NotImplementedException();
+                OnTerminalSizeChanged?.Invoke(termWidth, termHeight);    // Need to resize the ansi-decoder/vt100 BoundScreen is attached to
+                BoundScreen.ReSize(termWidth, termHeight);
             }
+
+            BoundScreen.DoRefresh(false);
+        }
+
+
+        #region Action Handlers for Frame Buffer
+        private void BoundScreen_OnUIAction(List<TerminalFrameBuffer.UIActions> actions)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke((MethodInvoker)(() => { BoundScreen_OnUIAction(actions); }));
+                return;
+            }
+
+            this.SuspendLayout();
+
+            // Eventually need to sort the action list
+
+            TerminalFrameBuffer.UIAction_CursorMoved lastMove = null;
+
+            foreach (var action in actions)
+                switch (action.Action)
+                {
+                    case TerminalFrameBuffer.UIActions.ActionTypes.ClearScreen:
+                        terminalCanvasBitmapGraphic.FillRectangle(_getSolid(Color.Black), terminalRectangle);
+                        break;
+                    case TerminalFrameBuffer.UIActions.ActionTypes.CursorMoved:
+                        lastMove = (TerminalFrameBuffer.UIAction_CursorMoved)action;
+                        break;
+                    case TerminalFrameBuffer.UIActions.ActionTypes.SrollScreenUp:
+                        var scroll = (TerminalFrameBuffer.UIAction_ScrollScreenUp)action;
+                        BoundScreen_ScreenScrollsUp(scroll.SaveRow);
+                        break;
+                    case TerminalFrameBuffer.UIActions.ActionTypes.UpdateScreen:
+                        var glyph = (TerminalFrameBuffer.UIAction_UpdateScreen)action;
+                        BoundScreen_OnScreenChanged(glyph.Column, glyph.Row, glyph.Glyph);
+                        break;
+                    default:
+                        throw new NotImplementedException();
+                }
+
+            if (lastMove != null)
+            {
+                var moved = (TerminalFrameBuffer.UIAction_CursorMoved)lastMove;
+                BoundScreen_OnCursorChanged(new Point(moved.Column, moved.Row), moved.ShowCursor);
+            }
+
+            this.ResumeLayout();
+            this.Invalidate();
         }
 
         private static Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
@@ -91,12 +197,6 @@ namespace VRTermDev
 
         private void BoundScreen_ScreenScrollsUp(TerminalFrameBuffer.Character[] obj)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke((MethodInvoker)(() => { BoundScreen_ScreenScrollsUp(obj); }));
-                return;
-            }
-
             // We have to clip our bitmap and repaint it - nearly impossible in base gdi+
 
             if (terminalCanvasBitmap == null) return;
@@ -160,6 +260,7 @@ namespace VRTermDev
         }
 
         public Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>, Bitmap> glyphCache = new Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, char>, Bitmap>();
+        private Timer timer;
 
         public Bitmap getGlyph(Color BGColor, Color FGColor, TerminalFrameBuffer.GraphicAttributeElements Elements, Char glyph)
         {
@@ -184,20 +285,10 @@ namespace VRTermDev
             return bits;
         }
 
-
-
         private void BoundScreen_OnScreenChanged(int column, int row, TerminalFrameBuffer.Character inChar)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke((MethodInvoker)(() => { BoundScreen_OnScreenChanged(column, row, inChar); }));
-                return;
-            }
-
             if (inChar.Char < 32)
-               return;    // So far see BEL
-
-            this.SuspendLayout();
+                return;    // So far see BEL
 
             var glyphMap = getGlyph(inChar.Attributes.BackgroundColor,
                 inChar.Attributes.ForegroundColor,
@@ -207,86 +298,18 @@ namespace VRTermDev
             Rectangle rect = new Rectangle(new Point(column * charWidth, row * charHeight), charSize);
 
             terminalCanvasBitmapGraphic.DrawImage((Image)glyphMap, rect);
-
-            this.ResumeLayout();
-            this.Refresh();
         }
+
+        bool cursorIsVisible = false;
+        Point cursorCurrent;
 
         private void BoundScreen_OnCursorChanged(Point cursorPosition, bool showCursor)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke((MethodInvoker)(() => { BoundScreen_OnCursorChanged(cursorPosition, showCursor); }));
-                return;
-            }
-
-            if (showCursor)
-                Cursor.Show();
-            else
-                Cursor.Hide();
-
-            Cursor.Current = Cursors.IBeam;
-
-            Cursor.Position = this.PointToScreen(new Point(cursorPosition.X * charWidth, cursorPosition.Y * charHeight));
-           
-            //Cursor.Clip = new Rectangle(this.Location, this.Size);
-
+            cursorIsVisible = showCursor;
+            cursorCurrent = cursorPosition;
         }
+        #endregion
 
-        protected override void OnPaintBackground(PaintEventArgs e)
-        {
-            base.OnPaintBackground(e);
-        }
-
-        protected override void OnPaint(PaintEventArgs pe)
-        {
-            base.OnPaint(pe);
-            // Dump our frame buffer bitmap to the screen (double-buffered hopefully)
-
-            if (terminalCanvasBitmap != null)
-                pe.Graphics.DrawImage((Image)terminalCanvasBitmap, 0, 0);
-        }
-
-        protected override void OnSizeChanged(EventArgs e)
-        {
-            if (DesignMode) return;
-
-            buildBuffer();
-
-            base.OnSizeChanged(e);
-        }
-
-        private void buildBuffer()
-        {
-            var tSize = this.Size;
-
-            if (tSize.Height < 1) return;
-            if (TerminalFont == null) return;
-
-            var tmpG = this.CreateGraphics();
-            terminalCanvasBitmap = new Bitmap(tSize.Width, tSize.Height, tmpG);
-
-            terminalCanvasBitmapGraphic = Graphics.FromImage((Image)terminalCanvasBitmap); ;
-            var charS = terminalCanvasBitmapGraphic.MeasureString("M", TerminalFont);
-
-            charWidth = Convert.ToInt32(charS.Width + .5) - 6;  // This is HACK!  Need to figure out how to deal with font margins
-            charHeight = Convert.ToInt32(charS.Height + .5);
-            charSize = new Size(charWidth, charHeight);
-
-            termWidth = tSize.Width / charWidth;
-            termHeight = tSize.Height / charHeight;
-
-            terminalRectangle = new Rectangle(new Point(0, 0), new Size(termWidth * charWidth, termHeight * charHeight));
-
-            if (BoundScreen.Width != termWidth ||
-                BoundScreen.Height != termHeight)
-            {
-                OnTerminalSizeChanged?.Invoke(termWidth, termHeight);    // Need to resize the ansi-decoder/vt100 BoundScreen is attached to
-                BoundScreen.ReSize(termWidth, termHeight);
-            }
-
-            BoundScreen.DoRefresh(false);
-        }
 
         public void BeginInit()
         {
