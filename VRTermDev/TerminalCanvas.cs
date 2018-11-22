@@ -103,7 +103,7 @@ namespace VRTermDev
             glyph.Char);
 
             var cursorRect = new Rectangle(new Point(cursorCurrent.X * charWidth, cursorCurrent.Y * charHeight), charSize);
-            pe.Graphics.DrawImage((Image) glyphMap, cursorRect);
+            pe.Graphics.DrawImage((Image)glyphMap, cursorRect);
 
             base.OnPaint(pe);
         }

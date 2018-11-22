@@ -47,7 +47,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AnsiDecoder.cs" />
-    <Compile Include="AnsiDecoderClient.cs" />
     <Compile Include="EscapeCharacterDecoder.cs" />
     <Compile Include="IAnsiDecoder.cs" />
     <Compile Include="IAnsiDecoderClient.cs" />
@@ -55,10 +54,7 @@
     <Compile Include="InvalidByteException.cs" />
     <Compile Include="InvalidCommandException.cs" />
     <Compile Include="InvalidParameterException.cs" />
-    <Compile Include="IVT100Decoder.cs" />
-    <Compile Include="IVT100DecoderClient.cs" />
     <Compile Include="TerminalFrameBuffer.cs" />
-    <Compile Include="VT100Decoder.cs" />
     <Compile Include="AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
