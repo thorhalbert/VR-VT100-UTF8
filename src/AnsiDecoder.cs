@@ -221,6 +221,10 @@ namespace libVT100
                             OnModeChanged(AnsiMode.HideCursor);
                             break;
 
+                        case "?12":  //XTERM
+                        case "?40":
+                            break;
+
                         default:
                             throw new InvalidParameterException(_command, _parameter);
                     }
@@ -284,6 +288,10 @@ namespace libVT100
                             OnModeChanged(AnsiMode.ShowCursor);
                             break;
 
+                        case "?40":
+                            // XTERM
+                            break;
+
                         default:
                             throw new InvalidParameterException(_command, _parameter);
                     }
@@ -300,7 +308,11 @@ namespace libVT100
                     break;
 
                 // Xterm commands - will need to figure out what they do and implement
-                case '(':
+                case '(':  
+                case 'I':   // ?12 ?45
+                case 'r':
+                case 'M':
+                case 'c':    // 0
                     break;
 
                 default:

@@ -21,7 +21,7 @@ namespace libVT100.Tests
         {
             IAnsiDecoder vt100 = new AnsiDecoder();
             //vt100.Encoding = encodingInfo.GetEncoding (); // encodingInfo.Name, new EncoderExceptionFallback(), new DecoderReplacementFallback ("U") );
-            Screen screen = new Screen ( 80, 160 );
+            TerminalFrameBuffer screen = new TerminalFrameBuffer ( 80, 160 );
             vt100.Subscribe ( screen );
             
             using ( BinaryReader reader = new BinaryReader(File.Open(_filename, FileMode.Open)) )

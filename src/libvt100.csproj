@@ -57,7 +57,7 @@
     <Compile Include="InvalidParameterException.cs" />
     <Compile Include="IVT100Decoder.cs" />
     <Compile Include="IVT100DecoderClient.cs" />
-    <Compile Include="Screen.cs" />
+    <Compile Include="TerminalFrameBuffer.cs" />
     <Compile Include="VT100Decoder.cs" />
     <Compile Include="AssemblyInfo.cs" />
   </ItemGroup>

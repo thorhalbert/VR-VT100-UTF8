@@ -21,7 +21,7 @@ namespace VRTermDev
         // Connection (SSH)
         private SshClient client;
         private IAnsiDecoder vt100;
-        private libVT100.Screen screen;
+        private libVT100.TerminalFrameBuffer screen;
         private KeyboardStream keyboardStream;
 
         int termColumns, termRows;
@@ -109,7 +109,7 @@ namespace VRTermDev
 
             client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
 
-            screen = new libVT100.Screen(10, 10);  // This will get set to reality quickly
+            screen = new libVT100.TerminalFrameBuffer(10, 10);  // This will get set to reality quickly
 
             keyboardStream = new KeyboardStream();
             var screenS = new ScreenStream();
