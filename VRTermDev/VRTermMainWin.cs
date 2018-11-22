@@ -18,38 +18,46 @@ namespace VRTermDev
         int fontSize = 12;
         private Font screenFont;
 
-        int charWidth;
-        int charHeight;
-
-        int termWidth = 0;
-        int termHeight = 0;
-        private Bitmap terminalFrameBitmap;
-        private Graphics terminalGraphicsContext;
-
         // Connection (SSH)
         private SshClient client;
         private IAnsiDecoder vt100;
         private libVT100.Screen screen;
+        private KeyboardStream keyboardStream;
+
+        int termColumns, termRows;
 
         public VRTermMain()
         {
             InitializeComponent();
 
+            //SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+
             screenFont = new Font(fontName, fontSize);
 
             VRTermMain_SizeChanged(this, new EventArgs());  // After this, we'll have a bitmap
 
+            terminalFrameBuffer.OnTerminalSizeChanged += TerminalFrameBuffer_OnTerminalSizeChanged;
+            terminalFrameBuffer.TerminalFont = screenFont;
+
             checkLoginState();
+        }
+
+        private void TerminalFrameBuffer_OnTerminalSizeChanged(int columns, int rows)
+        {
+            termColumns = columns;
+            termRows = rows;
+
+            screenInfo.Text = "Size: " + columns + ", " + rows;
         }
 
         private void checkLoginState()
         {
-            if (client!=null && client.IsConnected)
+            if (client != null && client.IsConnected)
             {
                 connectButton.Enabled = false;
                 disconnectButton.Enabled = true;
 
-                statusLabel.Text = client.ConnectionInfo.Username + "@" + client.ConnectionInfo.Host + " [" + client.ConnectionInfo.ServerVersion+"]";
+                statusLabel.Text = client.ConnectionInfo.Username + "@" + client.ConnectionInfo.Host + " [" + client.ConnectionInfo.ServerVersion + "]";
 
                 return;
             }
@@ -61,7 +69,7 @@ namespace VRTermDev
 
             disconnectButton.Enabled = false;
 
-                connectButton.Enabled = allGood;
+            connectButton.Enabled = allGood;
 
             statusLabel.Text = "disconnected";
         }
@@ -75,30 +83,6 @@ namespace VRTermDev
             var fSize = this.Size;
 
             terminalFrameBuffer.Size = new Size(fSize.Width - 25, fSize.Height - top - 50);  // hacky offsets
-        }
-
-        // Recompute the terminal size - this will cause our initial bitmap to be built
-        private void terminalFrameBuffer_SizeChanged(object sender, EventArgs e)
-        {
-            var tSize = terminalFrameBuffer.Size;
-
-            charWidth = screenFont.Height;    // HACK HACK - figure out how big an M is - this are fixed fonts
-            charHeight = screenFont.Height;
-
-            termWidth = tSize.Width / charWidth;
-            termHeight = tSize.Height / charHeight;
-
-            screenInfo.Text = termHeight + " x " + termWidth;
-
-            resizeTerminal();
-        }
-
-        private void resizeTerminal()
-        {
-            terminalFrameBitmap = new Bitmap(charWidth * termWidth, charHeight * termHeight);
-            terminalGraphicsContext = Graphics.FromImage(terminalFrameBitmap);
-
-            terminalFrameBuffer.Image = (Image)terminalFrameBitmap;
         }
 
         private void host_textbox_TextChanged(object sender, EventArgs e)
@@ -125,6 +109,20 @@ namespace VRTermDev
 
             client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
 
+            screen = new libVT100.Screen(10, 10);  // This will get set to reality quickly
+
+            keyboardStream = new KeyboardStream();
+            var screenS = new ScreenStream();
+
+            terminalFrameBuffer.BoundScreen = screen;
+          
+            terminalFrameBuffer.Init();
+
+            vt100 = new AnsiDecoder();
+            screenS.InjectTo = vt100;
+            vt100.Encoding = new UTF8Encoding(); // Encoding.GetEncoding("utf8");
+            vt100.Subscribe(screen); 
+
             try
             {
                 client.Connect();
@@ -140,28 +138,16 @@ namespace VRTermDev
 
             checkLoginState();
 
-            var keyS = Console.OpenStandardInput();
-            var screenS = new ScreenStream();
-
-            vt100 = new AnsiDecoder();
-            screen = new libVT100.Screen(termWidth, termHeight);
-
-            vt100.Encoding = Encoding.GetEncoding("utf8");
-            vt100.Subscribe(screen);
-
-            screenS.AnsiDecoder = vt100;
-
-            vt100.Output += Vt100_Output;
-
-            var shell = client.CreateShell(keyS, screenS, screenS);  // stdin, stdout, stderr
+            if (terminalFrameBuffer.CanFocus)
+            {
+                terminalFrameBuffer.Focus();
+            }
+                     
+            var shell = client.CreateShell(keyboardStream, screenS, screenS);  // stdin, stdout, stderr
 
             shell.Start();
         }
 
-        private void Vt100_Output(IDecoder _decoder, byte[] _output)
-        {
-          
-        }
 
         private void disconnectButton_Click(object sender, EventArgs e)
         {
@@ -174,6 +160,16 @@ namespace VRTermDev
             client = null;
 
             checkLoginState();
+        }
+
+        private void terminalFrameBuffer_PreviewKeyDown(object sender, PreviewKeyDownEventArgs e)
+        {
+
+
+            var value = KeyboardMaps.ConvertStroke(KeyboardMaps.KeyboardTypes.American, e);
+
+
+            keyboardStream.Inject(value);
         }
     }
 }

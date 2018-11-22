@@ -8,10 +8,11 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>VRTermDev</RootNamespace>
     <AssemblyName>VRTermDev</AssemblyName>
-    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.7.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
+    <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -49,7 +50,14 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ConvertStroke.cs" />
     <Compile Include="KeyboardStream.cs" />
+    <Compile Include="TerminalCanvas.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="TerminalCanvas.Designer.cs">
+      <DependentUpon>TerminalCanvas.cs</DependentUpon>
+    </Compile>
     <Compile Include="ScreenStream.cs" />
     <Compile Include="VRTermMainWin.cs">
       <SubType>Form</SubType>
@@ -59,9 +67,6 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <EmbeddedResource Include="Form1.resx">
-      <DependentUpon>VRTermMainWin.cs</DependentUpon>
-    </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
       <LastGenOutput>Resources.Designer.cs</LastGenOutput>
@@ -70,7 +75,14 @@
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
+      <DesignTime>True</DesignTime>
     </Compile>
+    <EmbeddedResource Include="TerminalCanvas.resx">
+      <DependentUpon>TerminalCanvas.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="VRTermMainWin.resx">
+      <DependentUpon>VRTermMainWin.cs</DependentUpon>
+    </EmbeddedResource>
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>

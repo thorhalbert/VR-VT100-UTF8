@@ -20,7 +20,7 @@ namespace VRTermDev
 
         public override long Position { get { return 0; } set => throw new NotImplementedException(); }
 
-        public IAnsiDecoder AnsiDecoder { get; internal set; }
+        public IAnsiDecoder InjectTo { get; internal set; }
 
         public override void Flush()
         {
@@ -46,7 +46,7 @@ namespace VRTermDev
         {
             if (count == 1)  // How often is this one?  This is probably cheaper
             {
-                AnsiDecoder.Input(new byte[1] { buffer[offset] });
+                InjectTo.Input(new byte[1] { buffer[offset] });
                 return;
             }
 
@@ -55,7 +55,7 @@ namespace VRTermDev
 
             // var str = System.Text.Encoding.UTF8.GetString(buffer, offset, count);
 
-            AnsiDecoder.Input(retA);
+            InjectTo.Input(retA);
 
             // Console.WriteLine("Buffer=/" + str + "/");
         }

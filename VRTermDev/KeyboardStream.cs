@@ -9,6 +9,8 @@ namespace VRTermDev
 {
     class KeyboardStream: Stream
     {
+        private List<byte> keyboardFifo = new List<byte>();
+
         public override bool CanRead { get { return true; } }
 
         public override bool CanSeek => throw new NotImplementedException();
@@ -26,7 +28,14 @@ namespace VRTermDev
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            throw new NotImplementedException();
+            if (keyboardFifo.Count < 1) return 0;
+
+            // Pop the first item
+            var pop = keyboardFifo[0];
+            keyboardFifo.RemoveAt(0);
+
+            buffer[offset] = pop;   // We can return more than one
+            return 1;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
@@ -42,6 +51,11 @@ namespace VRTermDev
         public override void Write(byte[] buffer, int offset, int count)
         {
             throw new NotImplementedException();
+        }
+
+        internal void Inject(byte[] keyValue)
+        {
+            keyboardFifo.AddRange(keyValue);
         }
     }
 }

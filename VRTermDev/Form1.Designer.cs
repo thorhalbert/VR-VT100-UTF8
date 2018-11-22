@@ -31,18 +31,18 @@
             this.flowLayoutPanel1 = new System.Windows.Forms.FlowLayoutPanel();
             this.tableLayoutPanel1 = new System.Windows.Forms.TableLayoutPanel();
             this.flowLayoutPanel2 = new System.Windows.Forms.FlowLayoutPanel();
-            this.host_textbox = new System.Windows.Forms.TextBox();
-            this.user_textbox = new System.Windows.Forms.TextBox();
-            this.pass_textbox = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
+            this.host_textbox = new System.Windows.Forms.TextBox();
             this.label2 = new System.Windows.Forms.Label();
+            this.user_textbox = new System.Windows.Forms.TextBox();
             this.label3 = new System.Windows.Forms.Label();
+            this.pass_textbox = new System.Windows.Forms.TextBox();
+            this.screenInfo = new System.Windows.Forms.Label();
             this.flowLayoutPanel3 = new System.Windows.Forms.FlowLayoutPanel();
             this.connectButton = new System.Windows.Forms.Button();
             this.disconnectButton = new System.Windows.Forms.Button();
             this.statusLabel = new System.Windows.Forms.Label();
-            this.terminalFrameBuffer = new System.Windows.Forms.PictureBox();
-            this.screenInfo = new System.Windows.Forms.Label();
+            this.terminalFrameBuffer = new VRTermDev.TerminalCanvas();
             this.flowLayoutPanel1.SuspendLayout();
             this.tableLayoutPanel1.SuspendLayout();
             this.flowLayoutPanel2.SuspendLayout();
@@ -52,6 +52,7 @@
             // 
             // flowLayoutPanel1
             // 
+            this.flowLayoutPanel1.AutoSize = true;
             this.flowLayoutPanel1.Controls.Add(this.tableLayoutPanel1);
             this.flowLayoutPanel1.Controls.Add(this.terminalFrameBuffer);
             this.flowLayoutPanel1.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -90,33 +91,6 @@
             this.flowLayoutPanel2.Size = new System.Drawing.Size(484, 94);
             this.flowLayoutPanel2.TabIndex = 0;
             // 
-            // host_textbox
-            // 
-            this.flowLayoutPanel2.SetFlowBreak(this.host_textbox, true);
-            this.host_textbox.Location = new System.Drawing.Point(56, 3);
-            this.host_textbox.Name = "host_textbox";
-            this.host_textbox.Size = new System.Drawing.Size(303, 20);
-            this.host_textbox.TabIndex = 1;
-            this.host_textbox.TextChanged += new System.EventHandler(this.host_textbox_TextChanged);
-            // 
-            // user_textbox
-            // 
-            this.flowLayoutPanel2.SetFlowBreak(this.user_textbox, true);
-            this.user_textbox.Location = new System.Drawing.Point(56, 29);
-            this.user_textbox.Name = "user_textbox";
-            this.user_textbox.Size = new System.Drawing.Size(303, 20);
-            this.user_textbox.TabIndex = 3;
-            this.user_textbox.TextChanged += new System.EventHandler(this.user_textbox_TextChanged);
-            // 
-            // pass_textbox
-            // 
-            this.flowLayoutPanel2.SetFlowBreak(this.pass_textbox, true);
-            this.pass_textbox.Location = new System.Drawing.Point(57, 55);
-            this.pass_textbox.Name = "pass_textbox";
-            this.pass_textbox.Size = new System.Drawing.Size(303, 20);
-            this.pass_textbox.TabIndex = 5;
-            this.pass_textbox.TextChanged += new System.EventHandler(this.pass_textbox_TextChanged);
-            // 
             // label1
             // 
             this.label1.AutoSize = true;
@@ -126,6 +100,15 @@
             this.label1.Size = new System.Drawing.Size(47, 20);
             this.label1.TabIndex = 0;
             this.label1.Text = "Host:";
+            // 
+            // host_textbox
+            // 
+            this.flowLayoutPanel2.SetFlowBreak(this.host_textbox, true);
+            this.host_textbox.Location = new System.Drawing.Point(56, 3);
+            this.host_textbox.Name = "host_textbox";
+            this.host_textbox.Size = new System.Drawing.Size(303, 20);
+            this.host_textbox.TabIndex = 1;
+            this.host_textbox.TextChanged += new System.EventHandler(this.host_textbox_TextChanged);
             // 
             // label2
             // 
@@ -137,6 +120,15 @@
             this.label2.TabIndex = 2;
             this.label2.Text = "User:";
             // 
+            // user_textbox
+            // 
+            this.flowLayoutPanel2.SetFlowBreak(this.user_textbox, true);
+            this.user_textbox.Location = new System.Drawing.Point(56, 29);
+            this.user_textbox.Name = "user_textbox";
+            this.user_textbox.Size = new System.Drawing.Size(303, 20);
+            this.user_textbox.TabIndex = 3;
+            this.user_textbox.TextChanged += new System.EventHandler(this.user_textbox_TextChanged);
+            // 
             // label3
             // 
             this.label3.AutoSize = true;
@@ -146,6 +138,25 @@
             this.label3.Size = new System.Drawing.Size(48, 20);
             this.label3.TabIndex = 4;
             this.label3.Text = "Pass:";
+            // 
+            // pass_textbox
+            // 
+            this.flowLayoutPanel2.SetFlowBreak(this.pass_textbox, true);
+            this.pass_textbox.Location = new System.Drawing.Point(57, 55);
+            this.pass_textbox.Name = "pass_textbox";
+            this.pass_textbox.PasswordChar = '*';
+            this.pass_textbox.Size = new System.Drawing.Size(303, 20);
+            this.pass_textbox.TabIndex = 5;
+            this.pass_textbox.TextChanged += new System.EventHandler(this.pass_textbox_TextChanged);
+            // 
+            // screenInfo
+            // 
+            this.screenInfo.AutoSize = true;
+            this.screenInfo.Location = new System.Drawing.Point(3, 78);
+            this.screenInfo.Name = "screenInfo";
+            this.screenInfo.Size = new System.Drawing.Size(57, 13);
+            this.screenInfo.TabIndex = 6;
+            this.screenInfo.Text = "screenInfo";
             // 
             // flowLayoutPanel3
             // 
@@ -196,23 +207,15 @@
             // terminalFrameBuffer
             // 
             this.terminalFrameBuffer.BackColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.terminalFrameBuffer.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.terminalFrameBuffer.BoundScreen = null;
             this.terminalFrameBuffer.Location = new System.Drawing.Point(3, 109);
             this.terminalFrameBuffer.Name = "terminalFrameBuffer";
-            this.terminalFrameBuffer.Size = new System.Drawing.Size(981, 767);
-            this.terminalFrameBuffer.SizeMode = System.Windows.Forms.PictureBoxSizeMode.AutoSize;
+            this.terminalFrameBuffer.Size = new System.Drawing.Size(981, 200);
+            //this.terminalFrameBuffer.SizeMode = System.Windows.Forms.PictureBoxSizeMode.AutoSize;
             this.terminalFrameBuffer.TabIndex = 6;
             this.terminalFrameBuffer.TabStop = false;
-            this.terminalFrameBuffer.SizeChanged += new System.EventHandler(this.terminalFrameBuffer_SizeChanged);
-            // 
-            // screenInfo
-            // 
-            this.screenInfo.AutoSize = true;
-            this.screenInfo.Location = new System.Drawing.Point(3, 78);
-            this.screenInfo.Name = "screenInfo";
-            this.screenInfo.Size = new System.Drawing.Size(57, 13);
-            this.screenInfo.TabIndex = 6;
-            this.screenInfo.Text = "screenInfo";
+            this.terminalFrameBuffer.TerminalFont = null;
+            this.terminalFrameBuffer.PreviewKeyDown += new System.Windows.Forms.PreviewKeyDownEventHandler(this.terminalFrameBuffer_PreviewKeyDown);
             // 
             // VRTermMain
             // 
@@ -220,6 +223,7 @@
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(1019, 900);
             this.Controls.Add(this.flowLayoutPanel1);
+            this.KeyPreview = true;
             this.Name = "VRTermMain";
             this.Text = "VR Terminal Development Sandbox";
             this.SizeChanged += new System.EventHandler(this.VRTermMain_SizeChanged);
@@ -232,6 +236,7 @@
             this.flowLayoutPanel3.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.terminalFrameBuffer)).EndInit();
             this.ResumeLayout(false);
+            this.PerformLayout();
 
         }
 
@@ -244,7 +249,7 @@
         private System.Windows.Forms.TextBox user_textbox;
         private System.Windows.Forms.Label label3;
         private System.Windows.Forms.TextBox pass_textbox;
-        private System.Windows.Forms.PictureBox terminalFrameBuffer;
+        private VRTermDev.TerminalCanvas terminalFrameBuffer;
         private System.Windows.Forms.TableLayoutPanel tableLayoutPanel1;
         private System.Windows.Forms.FlowLayoutPanel flowLayoutPanel2;
         private System.Windows.Forms.FlowLayoutPanel flowLayoutPanel3;

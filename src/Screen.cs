@@ -219,6 +219,8 @@ namespace libVT100
             }
         }
 
+    
+
         public class Character
         {
             private char m_char;
@@ -259,6 +261,12 @@ namespace libVT100
                 m_graphicAttributes = new GraphicAttributes();
             }
 
+            public Character(char _char, GraphicAttributes _attribs)
+            {
+                m_char = _char;
+                m_graphicAttributes = _attribs;
+            }
+
         }
 
         protected Point m_cursorPosition;
@@ -282,7 +290,7 @@ namespace libVT100
                     {
                         for (int y = 0; y < Height; ++y)
                         {
-                            this[x, y] = new Character();
+                            m_screen[x,y] = new Character();  // Don't let this do callbacks
                         }
                     }
                     CursorPosition = new Point(0, 0);
@@ -306,6 +314,8 @@ namespace libVT100
             }
         }
 
+        public event Action<Point, bool> OnCursorChanged;
+
         public Point CursorPosition
         {
             get
@@ -319,9 +329,13 @@ namespace libVT100
                     CheckColumnRow(value.X, value.Y);
 
                     m_cursorPosition = value;
+
+                    OnCursorChanged?.Invoke(m_cursorPosition, m_showCursor);
                 }
             }
         }
+
+        public event Action<int, int, Character> OnScreenChanged;
 
         public Character this[int _column, int _row]
         {
@@ -336,6 +350,8 @@ namespace libVT100
                 CheckColumnRow(_column, _row);
 
                 m_screen[_column, _row] = value;
+
+                OnScreenChanged?.Invoke(_column, _row, value);
             }
         }
 
@@ -359,6 +375,41 @@ namespace libVT100
             m_currentAttributes.Reset();
         }
 
+        public void ReSize(int termWidth, int termHeight)
+        {
+            // For now we just start over, later we clip
+            //  Someday I'd like to do really clever things with line wrapping
+
+            Size = new Size(termWidth, termHeight);
+            m_showCursor = true;
+            m_savedCursorPosition = Point.Empty;
+            m_currentAttributes.Reset();
+        }
+
+        public void DoRefresh(bool sendWhite)
+        {
+            // Go through the array and send everything back
+            //  If !sendwhite, don't send spaces with black background
+
+            for (int x = 0; x < Width; ++x)
+            {
+                for (int y = 0; y < Height; ++y)
+                {
+                    var c = this[x, y];
+                    if (sendWhite)
+                        OnScreenChanged?.Invoke(x, y, c);
+                    else
+                    {
+                        var white = (c.Char == ' ');
+                        if (c.Attributes.Background != TextColor.Black)
+                            white = false;
+                        if (!white)
+                            OnScreenChanged?.Invoke(x, y, c);
+                    }
+                }
+            }
+        }
+
         protected void CheckColumnRow(int _column, int _row)
         {
             if (_column >= Width)
@@ -375,7 +426,13 @@ namespace libVT100
         {
             if (m_cursorPosition.X + 1 >= Width)
             {
-                CursorPosition = new Point(0, m_cursorPosition.Y + 1);
+                if (m_cursorPosition.Y + 1 < Height)  // This can make us scroll
+                    CursorPosition = new Point(0, m_cursorPosition.Y + 1);
+                else
+                {
+                    ScrollDownOne();
+                    CursorPosition = new Point(0, Height - 1);
+                }
             }
             else
             {
@@ -395,11 +452,39 @@ namespace libVT100
             }
         }
 
+        // Get the client to scroll - thrashing the buffers is too slow
+        public event Action<Character[]> ScreenScrollsUp;
+
+        private void ScrollDownOne()
+        {
+            // Save the top line
+
+            var keepScroll = new Character[Width];
+            for (var col = 0; col < Width; col++)
+                keepScroll[col] = m_screen[col, 0];
+
+            // Move all lines up - top line goes away, bottom line is blank
+
+            for (var row = 1; row < Height; row++)
+                for (var col = 0; col < Width; col++)
+                    m_screen[col, row - 1] = m_screen[col, row];
+
+            for (var col = 0; col < Width; col++)
+                m_screen[col, Height - 1] = new Character();
+
+            ScreenScrollsUp?.Invoke(keepScroll);
+        }
+
         public void CursorDown()
         {
             if (m_cursorPosition.Y + 1 >= Height)
             {
-                throw new Exception("Can not move further down!");
+                // Hit bottom.  Must scroll
+
+                ScrollDownOne();
+                return;  // We scrolled instead of moving cursor down, so no change there
+
+                //throw new Exception("Can not move further down!");
             }
             CursorPosition = new Point(m_cursorPosition.X, m_cursorPosition.Y + 1);
         }
@@ -434,45 +519,45 @@ namespace libVT100
             return builder.ToString();
         }
 
-        public Bitmap ToBitmap(Font _font)
-        {
-            if (_font == null)
-            {
-                throw new ArgumentNullException("_font", "A font must be specified.");
-            }
+        //public Bitmap ToBitmap(Font _font)
+        //{
+        //    if (_font == null)
+        //    {
+        //        throw new ArgumentNullException("_font", "A font must be specified.");
+        //    }
 
-            Bitmap bitmap = new Bitmap(_font.Height * Width, _font.Height * Height);
-            Graphics graphics = Graphics.FromImage(bitmap);
-            for (int y = 0; y < Height; ++y)
-            {
-                for (int x = 0; x < Width; ++x)
-                {
-                    Character character = this[x, y];
-                    Rectangle rect = new Rectangle(_font.Height * x, _font.Height * y, _font.Height, _font.Height);
-                    graphics.FillRectangle(new SolidBrush(character.Attributes.BackgroundColor), rect);
+        //    Bitmap bitmap = new Bitmap(_font.Height * Width, _font.Height * Height);
+        //    Graphics graphics = Graphics.FromImage(bitmap);
+        //    for (int y = 0; y < Height; ++y)
+        //    {
+        //        for (int x = 0; x < Width; ++x)
+        //        {
+        //            Character character = this[x, y];
+        //            Rectangle rect = new Rectangle(_font.Height * x, _font.Height * y, _font.Height, _font.Height);
+        //            graphics.FillRectangle(new SolidBrush(character.Attributes.BackgroundColor), rect);
 
-                    Font font = _font;
-                    if (character.Attributes.Bold)
-                    {
-                        if (character.Attributes.Italic)
-                        {
-                            font = new Font(_font.FontFamily, _font.Size, FontStyle.Bold | FontStyle.Italic);
-                        }
-                        else
-                        {
-                            font = new Font(_font.FontFamily, _font.Size, FontStyle.Bold);
-                        }
-                    }
-                    else if (character.Attributes.Italic)
-                    {
-                        font = new Font(_font.FontFamily, _font.Size, FontStyle.Italic);
-                    }
-                    String text = new String(character.Char, 1);
-                    graphics.DrawString(text, font, new SolidBrush(character.Attributes.ForegroundColor), rect);
-                }
-            }
-            return bitmap;
-        }
+        //            Font font = _font;
+        //            if (character.Attributes.Bold)
+        //            {
+        //                if (character.Attributes.Italic)
+        //                {
+        //                    font = new Font(_font.FontFamily, _font.Size, FontStyle.Bold | FontStyle.Italic);
+        //                }
+        //                else
+        //                {
+        //                    font = new Font(_font.FontFamily, _font.Size, FontStyle.Bold);
+        //                }
+        //            }
+        //            else if (character.Attributes.Italic)
+        //            {
+        //                font = new Font(_font.FontFamily, _font.Size, FontStyle.Italic);
+        //            }
+        //            String text = new String(character.Char, 1);
+        //            graphics.DrawString(text, font, new SolidBrush(character.Attributes.ForegroundColor), rect);
+        //        }
+        //    }
+        //    return bitmap;
+        //}
 
         IEnumerator<Screen.Character> IEnumerable<Screen.Character>.GetEnumerator()
         {
@@ -500,12 +585,12 @@ namespace libVT100
                 }
                 else if (ch == '\r')
                 {
-                    //(this as IVT100DecoderClient).MoveCursorToBeginningOfLineBelow ( _sender, 1 );
+                    (this as IAnsiDecoderClient).MoveCursorToColumn(_sender, 0);
                 }
                 else
                 {
-                    this[CursorPosition].Char = ch;
-                    this[CursorPosition].Attributes = m_currentAttributes;
+                    this[CursorPosition] = new Character(ch, m_currentAttributes); ;
+
                     CursorForward();
                 }
             }
@@ -609,21 +694,21 @@ namespace libVT100
                 case ClearDirection.Forward:
                     for (int x = m_cursorPosition.X; x < Width; ++x)
                     {
-                        this[x, m_cursorPosition.Y].Char = ' ';
+                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
 
                 case ClearDirection.Backward:
                     for (int x = m_cursorPosition.X; x >= 0; --x)
                     {
-                        this[x, m_cursorPosition.Y].Char = ' ';
+                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
 
                 case ClearDirection.Both:
                     for (int x = 0; x < Width; ++x)
                     {
-                        this[x, m_cursorPosition.Y].Char = ' ';
+                        this[x, m_cursorPosition.Y] = new Character(' ', this[x, m_cursorPosition.Y].Attributes);
                     }
                     break;
             }
@@ -631,6 +716,8 @@ namespace libVT100
 
         void IAnsiDecoderClient.ScrollPageUpwards(IAnsiDecoder _sender, int _linesToScroll)
         {
+            for (var i = 0; i < _linesToScroll; i++)
+                ScrollDownOne();
         }
 
         void IAnsiDecoderClient.ScrollPageDownwards(IAnsiDecoder _sender, int _linesToScroll)
@@ -649,6 +736,10 @@ namespace libVT100
                     m_showCursor = true;
                     break;
             }
+
+
+            if (OnCursorChanged != null)
+                OnCursorChanged(m_cursorPosition, m_showCursor);
         }
 
         Point IAnsiDecoderClient.GetCursorPosition(IAnsiDecoder _sender)
@@ -685,11 +776,10 @@ namespace libVT100
                         break;
                     case GraphicRendition.Positive:
                     case GraphicRendition.Inverse:
-                        {
-                            TextColor tmp = m_currentAttributes.Foreground;
-                            m_currentAttributes.Foreground = m_currentAttributes.Background;
-                            m_currentAttributes.Background = tmp;
-                        }
+                        TextColor tmp = m_currentAttributes.Foreground;
+                        m_currentAttributes.Foreground = m_currentAttributes.Background;
+                        m_currentAttributes.Background = tmp;
+
                         break;
                     case GraphicRendition.Conceal:
                         m_currentAttributes.Conceal = true;
