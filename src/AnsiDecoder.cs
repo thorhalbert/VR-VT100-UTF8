@@ -313,6 +313,9 @@ namespace libVT100
                 case 'r':
                 case 'M':
                 case 'c':    // 0
+                case 'j':   // XTERM set title/header
+                case '\\':  // XTERM 256 Color mode?
+                case ']':   // XTERM 256 Color mode?
                     break;
 
                 default:

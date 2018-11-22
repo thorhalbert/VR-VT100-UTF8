@@ -8,6 +8,8 @@ namespace libVT100
 {
     public class TerminalFrameBuffer: IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Character>
     {
+        public static bool DoAsserts { get; set;
+        }
         public enum Blink
         {
             None = 0,
@@ -54,6 +56,23 @@ namespace libVT100
             Blink_Slow = 32,
             Blink_Rapid = 64,
             Conceal = 128,
+        }
+
+        public class UIActions
+        {
+            public enum ActionTypes
+            {
+                ClearScreen
+            }
+
+            public ActionTypes Action { get; set; }
+            public bool Handled { get; set; }
+
+            public UIActions(ActionTypes _type)
+            {
+                Action = _type;
+                Handled = false;
+            }
         }
 
         public struct GraphicAttributes
@@ -222,8 +241,9 @@ namespace libVT100
                     case TextColor.BrightWhite:
                         return Color.Gray;
                 }
+                if (TerminalFrameBuffer.DoAsserts)  
                 throw new ArgumentOutOfRangeException("_textColor", "Unknown color value.");
-                //return Color.Transparent;
+                return Color.Transparent;
             }
 
             private bool _getElement(GraphicAttributeElements type)
@@ -362,6 +382,8 @@ namespace libVT100
             }
         }
 
+        public event Action<UIActions> OnUIAction;
+
         public event Action<int, int, Character> OnScreenChanged;
 
         public Character this[int _column, int _row]
@@ -426,7 +448,11 @@ namespace libVT100
             m_savedCursorPosition = Point.Empty;
             m_currentAttributes.Reset();
 
-            DoRefresh(true);
+            var handler = new UIActions(UIActions.ActionTypes.ClearScreen);
+            OnUIAction?.Invoke(handler);
+
+            if (!handler.Handled)  // If the client handled, then we don't have to do it
+                DoRefresh(true);
         }
 
         public void DoRefresh(bool sendWhite)
@@ -582,22 +608,35 @@ namespace libVT100
         {
             foreach (char ch in _chars)
             {
-                if (ch == '\n')
+                if (ch >= 32)
                 {
-                    (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1);
-                }
-                else if (ch == '\r')
-                {
-                    (this as IAnsiDecoderClient).MoveCursorToColumn(_sender, 0);
-                }
-                else if (ch == '\x08')
-                    CursorBackward();
-                else
-                {
-                    this[CursorPosition] = new Character(ch, m_currentAttributes); ;
 
+                    this[CursorPosition] = new Character(ch, m_currentAttributes); ;
                     CursorForward();
+                    return;
                 }
+                switch (ch)
+                {
+                    case '\n':      // Linefeed
+                        (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1);
+                        return;
+                    case '\r':      // Return
+                        (this as IAnsiDecoderClient).MoveCursorToColumn(_sender, 0);
+                        return;
+                    case '\x08':    // Backspace
+                        CursorBackward();
+                        return;
+                    case '\t':      // Tab
+                        while (CursorPosition.X % 8 != 0)
+                        {
+                            this[CursorPosition] = new Character(ch, m_currentAttributes); ;
+                            CursorForward();
+                        }
+                        return;
+                    case '\x07':    // BEL
+                        return;
+                }
+
             }
         }
 
@@ -924,8 +963,9 @@ namespace libVT100
                         break;
 
                     default:
-
-                        throw new Exception("Unknown rendition command");
+                        if (TerminalFrameBuffer.DoAsserts)
+                            throw new Exception("Unknown rendition command");
+                        break;
                 }
             }
         }

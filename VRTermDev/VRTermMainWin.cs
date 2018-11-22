@@ -107,6 +107,10 @@ namespace VRTermDev
             if (client != null)
                 client.Dispose();
 
+            host_textbox.Enabled =
+                user_textbox.Enabled =
+                pass_textbox.Enabled = false;
+
             client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
 
             screen = new libVT100.TerminalFrameBuffer(10, 10);  // This will get set to reality quickly
@@ -115,13 +119,13 @@ namespace VRTermDev
             var screenS = new ScreenStream();
 
             terminalFrameBuffer.BoundScreen = screen;
-          
+
             terminalFrameBuffer.Init();
 
             vt100 = new AnsiDecoder();
             screenS.InjectTo = vt100;
             vt100.Encoding = new UTF8Encoding(); // Encoding.GetEncoding("utf8");
-            vt100.Subscribe(screen); 
+            vt100.Subscribe(screen);
 
             try
             {
@@ -142,7 +146,7 @@ namespace VRTermDev
             {
                 terminalFrameBuffer.Focus();
             }
-                     
+
             var shell = client.CreateShell(keyboardStream, screenS, screenS);  // stdin, stdout, stderr
 
             shell.Start();
@@ -151,6 +155,10 @@ namespace VRTermDev
 
         private void disconnectButton_Click(object sender, EventArgs e)
         {
+            host_textbox.Enabled =
+            user_textbox.Enabled =
+            pass_textbox.Enabled = true;
+
             if (client != null && client.IsConnected)
                 client.Disconnect();
 
@@ -162,12 +170,18 @@ namespace VRTermDev
             checkLoginState();
         }
 
+        private void pass_textbox_KeyUp(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                connectButton.PerformClick();
+            }
+        }
+
         private void terminalFrameBuffer_PreviewKeyDown(object sender, PreviewKeyDownEventArgs e)
         {
-
-
             var value = KeyboardMaps.ConvertStroke(KeyboardMaps.KeyboardTypes.American, e);
-
 
             keyboardStream.Inject(value);
         }

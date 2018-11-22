@@ -19,6 +19,7 @@ namespace VRTermDev
         private Size charSize;
         int termWidth = 0;
         int termHeight = 0;
+        private Rectangle terminalRectangle;
         private Bitmap terminalCanvasBitmap;
         private Graphics terminalCanvasBitmapGraphic;
 
@@ -52,6 +53,7 @@ namespace VRTermDev
                 BoundScreen.OnCursorChanged += BoundScreen_OnCursorChanged;
                 BoundScreen.OnScreenChanged += BoundScreen_OnScreenChanged;
                 BoundScreen.ScreenScrollsUp += BoundScreen_ScreenScrollsUp;
+                BoundScreen.OnUIAction += BoundScreen_OnUIAction;
             }
 
             buildBuffer();
@@ -59,6 +61,19 @@ namespace VRTermDev
             initCalled = true;
 
 
+        }
+
+        private void BoundScreen_OnUIAction(TerminalFrameBuffer.UIActions action)
+        {
+            switch (action.Action)
+            {
+                case TerminalFrameBuffer.UIActions.ActionTypes.ClearScreen:
+                    terminalCanvasBitmapGraphic.FillRectangle(_getSolid(Color.Black), terminalRectangle);
+                    action.Handled = true;
+                    break;
+                default:
+                    throw new NotImplementedException();
+            }
         }
 
         private static Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
@@ -260,6 +275,8 @@ namespace VRTermDev
 
             termWidth = tSize.Width / charWidth;
             termHeight = tSize.Height / charHeight;
+
+            terminalRectangle = new Rectangle(new Point(0, 0), new Size(termWidth * charWidth, termHeight * charHeight));
 
             if (BoundScreen.Width != termWidth ||
                 BoundScreen.Height != termHeight)

@@ -141,6 +141,7 @@
             // 
             // pass_textbox
             // 
+            this.pass_textbox.AcceptsReturn = true;
             this.flowLayoutPanel2.SetFlowBreak(this.pass_textbox, true);
             this.pass_textbox.Location = new System.Drawing.Point(57, 55);
             this.pass_textbox.Name = "pass_textbox";
@@ -148,6 +149,7 @@
             this.pass_textbox.Size = new System.Drawing.Size(303, 20);
             this.pass_textbox.TabIndex = 5;
             this.pass_textbox.TextChanged += new System.EventHandler(this.pass_textbox_TextChanged);
+            this.pass_textbox.KeyUp += new System.Windows.Forms.KeyEventHandler(this.pass_textbox_KeyUp);
             // 
             // screenInfo
             // 
@@ -211,7 +213,6 @@
             this.terminalFrameBuffer.Location = new System.Drawing.Point(3, 109);
             this.terminalFrameBuffer.Name = "terminalFrameBuffer";
             this.terminalFrameBuffer.Size = new System.Drawing.Size(981, 200);
-            //this.terminalFrameBuffer.SizeMode = System.Windows.Forms.PictureBoxSizeMode.AutoSize;
             this.terminalFrameBuffer.TabIndex = 6;
             this.terminalFrameBuffer.TabStop = false;
             this.terminalFrameBuffer.TerminalFont = null;
@@ -228,7 +229,6 @@
             this.Text = "VR Terminal Development Sandbox";
             this.SizeChanged += new System.EventHandler(this.VRTermMain_SizeChanged);
             this.flowLayoutPanel1.ResumeLayout(false);
-            this.flowLayoutPanel1.PerformLayout();
             this.tableLayoutPanel1.ResumeLayout(false);
             this.flowLayoutPanel2.ResumeLayout(false);
             this.flowLayoutPanel2.PerformLayout();
