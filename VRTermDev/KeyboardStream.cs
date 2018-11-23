@@ -28,14 +28,20 @@ namespace VRTermDev
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (keyboardFifo.Count < 1) return 0;
+            var retCount = 0;
 
-            // Pop the first item
-            var pop = keyboardFifo[0];
-            keyboardFifo.RemoveAt(0);
+            while (keyboardFifo.Count > 0 && offset<buffer.Length && count > 0)
+            {
+                // Pop the first item
+                var pop = keyboardFifo[0];
+                keyboardFifo.RemoveAt(0);
 
-            buffer[offset] = pop;   // We can return more than one
-            return 1;
+                buffer[offset++] = pop;   // We can return more than one
+                retCount++;
+                count--;
+            }
+     
+            return retCount;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
@@ -55,7 +61,8 @@ namespace VRTermDev
 
         internal void Inject(byte[] keyValue)
         {
-            keyboardFifo.AddRange(keyValue);
+            foreach (var b in keyValue)
+                keyboardFifo.Add(b);
         }
     }
 }

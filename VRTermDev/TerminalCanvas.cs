@@ -11,6 +11,7 @@ namespace VRTermDev
     {
         public Font TerminalFont { get; set; }
         public TerminalFrameBuffer BoundScreen { get; set; }
+        public Label LegendLabel { get; internal set; }
 
         public event Action<int, int> OnTerminalSizeChanged;
 
@@ -23,6 +24,8 @@ namespace VRTermDev
         private Bitmap terminalCanvasBitmap;
         private Graphics terminalCanvasBitmapGraphic;
         private Timer timer;
+        private Timer cursorTimer;
+        private bool cursorOn = false;
 
         public TerminalCanvas()
         {
@@ -37,6 +40,19 @@ namespace VRTermDev
             };
             timer.Tick += Timer_Tick;
             timer.Start();
+
+            cursorTimer = new Timer
+            {
+                Interval = 500
+            };
+            cursorTimer.Tick += CursorTimer_Tick;
+            cursorTimer.Start();
+        }
+
+        private void CursorTimer_Tick(object sender, EventArgs e)
+        {
+            cursorOn = !cursorOn;
+            cursorTimer.Start();
         }
 
         #region Manage Control Changes
@@ -90,6 +106,9 @@ namespace VRTermDev
 
             // Paint the cursor (if any)
             if (!cursorIsVisible) return;
+
+            // Flashing
+            if (!cursorOn) return;
 
             // For now, we just draw the character inverted
 
@@ -169,8 +188,6 @@ namespace VRTermDev
 
             // Eventually need to sort the action list
 
-            TerminalFrameBuffer.UIAction_CursorMoved lastMove = null;
-
             foreach (var action in actions)
                 switch (action.Action)
                 {
@@ -178,7 +195,8 @@ namespace VRTermDev
                         terminalCanvasBitmapGraphic.FillRectangle(_getSolid(Color.Black), terminalRectangle);
                         break;
                     case TerminalFrameBuffer.UIActions.ActionTypes.CursorMoved:
-                        lastMove = (TerminalFrameBuffer.UIAction_CursorMoved)action;
+                        var moved = (TerminalFrameBuffer.UIAction_CursorMoved)action;
+                        BoundScreen_OnCursorChanged(new Point(moved.Column, moved.Row), moved.ShowCursor);
                         break;
                     case TerminalFrameBuffer.UIActions.ActionTypes.SrollScreenUp:
                         var scroll = (TerminalFrameBuffer.UIAction_ScrollScreenUp)action;
@@ -188,15 +206,13 @@ namespace VRTermDev
                         var glyph = (TerminalFrameBuffer.UIAction_UpdateScreen)action;
                         BoundScreen_OnScreenChanged(glyph.Column, glyph.Row, glyph.Glyph);
                         break;
+                    case TerminalFrameBuffer.UIActions.ActionTypes.SetProperty:
+                        var prop = (TerminalFrameBuffer.UIAction_SetProperty)action;
+                        LegendLabel.Text = prop.PropertyValue;
+                        break;
                     default:
                         throw new NotImplementedException();
                 }
-
-            if (lastMove != null)
-            {
-                var moved = (TerminalFrameBuffer.UIAction_CursorMoved)lastMove;
-                BoundScreen_OnCursorChanged(new Point(moved.Column, moved.Row), moved.ShowCursor);
-            }
 
             this.ResumeLayout();
             this.Invalidate();
@@ -248,6 +264,7 @@ namespace VRTermDev
         private static Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
         public Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, Char>, Bitmap> glyphCache = new Dictionary<Tuple<Color, Color, TerminalFrameBuffer.GraphicAttributeElements, char>, Bitmap>();
         public Dictionary<TerminalFrameBuffer.GraphicAttributeElements, Font> fontCache = new Dictionary<TerminalFrameBuffer.GraphicAttributeElements, Font>();
+
 
         private static SolidBrush _getSolid(Color c)
         {

@@ -39,8 +39,8 @@ namespace libVT100.Tests
                 }
             }
             System.Console.Write ( screen.ToString() );
-            Bitmap bitmap = screen.ToBitmap ( new Font("Courier New", 10) );
-            bitmap.Save ( _filename + ".png", System.Drawing.Imaging.ImageFormat.Png );
+           // Bitmap bitmap = screen.ToBitmap ( new Font("Courier New", 10) );
+           // bitmap.Save ( _filename + ".png", System.Drawing.Imaging.ImageFormat.Png );
         }
     }
 }

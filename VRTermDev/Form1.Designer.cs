@@ -43,6 +43,7 @@
             this.disconnectButton = new System.Windows.Forms.Button();
             this.statusLabel = new System.Windows.Forms.Label();
             this.terminalFrameBuffer = new VRTermDev.TerminalCanvas();
+            this.terminalLegend = new System.Windows.Forms.Label();
             this.flowLayoutPanel1.SuspendLayout();
             this.tableLayoutPanel1.SuspendLayout();
             this.flowLayoutPanel2.SuspendLayout();
@@ -165,6 +166,7 @@
             this.flowLayoutPanel3.Controls.Add(this.connectButton);
             this.flowLayoutPanel3.Controls.Add(this.disconnectButton);
             this.flowLayoutPanel3.Controls.Add(this.statusLabel);
+            this.flowLayoutPanel3.Controls.Add(this.terminalLegend);
             this.flowLayoutPanel3.Dock = System.Windows.Forms.DockStyle.Fill;
             this.flowLayoutPanel3.Location = new System.Drawing.Point(493, 3);
             this.flowLayoutPanel3.Name = "flowLayoutPanel3";
@@ -218,6 +220,16 @@
             this.terminalFrameBuffer.TerminalFont = null;
             this.terminalFrameBuffer.PreviewKeyDown += new System.Windows.Forms.PreviewKeyDownEventHandler(this.terminalFrameBuffer_PreviewKeyDown);
             // 
+            // terminalLegend
+            // 
+            this.terminalLegend.AutoSize = true;
+            this.terminalLegend.Font = new System.Drawing.Font("Microsoft Sans Serif", 11.25F, ((System.Drawing.FontStyle)((System.Drawing.FontStyle.Bold | System.Drawing.FontStyle.Italic))), System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.terminalLegend.Location = new System.Drawing.Point(3, 38);
+            this.terminalLegend.Name = "terminalLegend";
+            this.terminalLegend.Size = new System.Drawing.Size(52, 18);
+            this.terminalLegend.TabIndex = 7;
+            this.terminalLegend.Text = "label4";
+            // 
             // VRTermMain
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -257,6 +269,7 @@
         private System.Windows.Forms.Button disconnectButton;
         private System.Windows.Forms.Label statusLabel;
         private System.Windows.Forms.Label screenInfo;
+        private System.Windows.Forms.Label terminalLegend;
     }
 }
 

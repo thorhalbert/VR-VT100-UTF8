@@ -486,5 +486,10 @@ namespace libVT100.Tests
         void IDisposable.Dispose ()
         {
         }
+
+        public void SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

@@ -122,6 +122,15 @@ namespace libVT100
         DisableInterlacing,
         NumericKeypad,
         AlternateKeypad,
+        SwitchToMainBuffer,
+        SwitchToAlternateBuffer,
+    }
+
+    public enum PropertyTypes
+    {
+        IconAndTitle,
+        WindowTitle,
+        IconName,
     }
 
     public interface IAnsiDecoderClient : IDisposable
@@ -142,5 +151,6 @@ namespace libVT100
         Point GetCursorPosition(IAnsiDecoder _sender);
         void SetGraphicRendition(IAnsiDecoder _sender, GraphicRendition[] _commands);
         void ModeChanged(IAnsiDecoder _sender, AnsiMode _mode);
+        void SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value);
     }
 }

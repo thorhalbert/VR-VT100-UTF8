@@ -9,13 +9,18 @@ namespace libVT100
     {
         public const byte EscapeCharacter = 0x1B;
         public const byte LeftBracketCharacter = 0x5B;
+        public const byte RightBracketCharacter = 0x5D;
+        public const byte BackslashCharacter = 0x5C;
         public const byte XonCharacter = 17;
         public const byte XoffCharacter = 19;
 
         protected enum State
         {
             Normal,
-            Command,
+            CommandCSI,
+            CommandTwo,
+            CommandThree,
+            CommandOSC
         }
         protected State m_state;
         protected Encoding m_encoding;
@@ -48,26 +53,26 @@ namespace libVT100
             m_state = State.Normal;
             (this as IDecoder).Encoding = Encoding.ASCII;
             m_commandBuffer = new List<byte>();
-            m_supportXonXoff = true;
+            m_supportXonXoff = false;
             m_xOffReceived = false;
             m_outBuffer = new List<byte[]>();
         }
 
         virtual protected bool IsValidParameterCharacter(char _c)
         {
+            //var interMed = "0123456789 ;!\"#$%&'()*+,-./";
+            const string interMed = "0123456789;?>=!#";
+            return interMed.IndexOf(_c) >= 0;
+           
             //return (Char.IsNumber( _c ) || _c == '(' || _c == ')' || _c == ';' || _c == '"' || _c == '?');
-            return (Char.IsNumber(_c) || _c == ';' || _c == '"' || _c == '?');
+            //return (Char.IsNumber(_c) || _c == ';' || _c == '"' || _c == '?');
         }
 
         protected void AddToCommandBuffer(byte _byte)
         {
             if (m_supportXonXoff)
-            {
                 if (_byte == XonCharacter || _byte == XoffCharacter)
-                {
                     return;
-                }
-            }
 
             m_commandBuffer.Add(_byte);
         }
@@ -77,17 +82,11 @@ namespace libVT100
             if (m_supportXonXoff)
             {
                 foreach (byte b in _bytes)
-                {
                     if (!(b == XonCharacter || b == XoffCharacter))
-                    {
                         m_commandBuffer.Add(b);
-                    }
-                }
             }
             else
-            {
                 m_commandBuffer.AddRange(_bytes);
-            }
         }
 
         protected virtual bool IsValidOneCharacterCommand(char _command)
@@ -95,113 +94,326 @@ namespace libVT100
             return false;
         }
 
+        private enum InternalState
+        {
+            Command,
+            Parameters,
+            Terminator,
+            Complete
+        }
+
+        private enum Terminators
+        {
+            Unknown,
+            Third,      // The third letter
+            CSITerm,    // Typical CSI, terminated by non-intermediate char
+            OSC_ST,     // Terminated by $\ (ST)
+            OSC_ST_BEL  // Terminaled by an ST ($\) or a BEL (0x07)
+        }
+
+        // Decoding state machine (at least for CSI codes)
         protected void ProcessCommandBuffer()
         {
-            /*
-            System.Console.Write ( "ProcessCommandBuffer: " );
-            foreach ( byte b in m_commandBuffer )
+            // Parser saw and escape so sent here
+
+            var phase = InternalState.Command;
+            var term = Terminators.Unknown;
+
+            var intermediates = string.Empty;
+            var parameters = string.Empty;
+            var terminator = string.Empty;
+
+            int cursor = 0;
+            m_state = State.CommandCSI;  // We're guessing (it's one or the other)
+            const string interParts = " !\"#$%&'()*+,-./?";
+            const string paramParts = "0123456789;";
+            const string twoLetter = "DEHMNOPVWXZ\\&_6789=>Fclmno|}~";
+            const string threeLetter = " #%()*+-./";
+            bool inEsc = false;
+
+            // See if we should be here    
+
+            var count = m_commandBuffer.Count;
+
+            if (count < 2) return;  // Not enough data
+
+            // Internal check
+
+            if (m_commandBuffer[cursor++] != EscapeCharacter)  // Internal Assert
             {
-                System.Console.Write ( "{0:X2} ", b );
+                throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
             }
-            System.Console.WriteLine ( "" );
-            */
 
-            m_state = State.Command;
+            // Start the state machine
 
-            if (m_commandBuffer.Count > 1)
+            while (true)
             {
-                if (m_commandBuffer[0] != EscapeCharacter)
+                if (cursor == count) return;   // Need more buffer
+
+                switch (phase)
                 {
-                    throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
+                    case InternalState.Command:
+                        var cmd = m_commandBuffer[cursor++];
+                        switch (cmd)
+                        {
+                            case LeftBracketCharacter:  // $[ CSI
+                                m_state = State.CommandCSI;
+                                term = Terminators.CSITerm;
+                                phase = InternalState.Parameters;
+                                break;
+
+                            case RightBracketCharacter: // $] OSC
+                                m_state = State.CommandOSC;
+                                term = Terminators.OSC_ST_BEL;
+                                intermediates = null;
+                                phase = InternalState.Terminator;
+                                break;
+
+                            default:
+                                // A Two Letter Escape Sequene
+                                if (twoLetter.IndexOf((char)cmd)>=0)
+                                {
+                                    m_state = State.CommandTwo;
+                                    terminator = new String(new char[] { (char)cmd });
+                                    phase = InternalState.Complete;
+
+                                    break;
+                                }
+
+                                if (threeLetter.IndexOf((char)cmd) > 0)
+                                {
+                                    m_state = State.CommandThree;
+                                    parameters = new String(new char[] { (char)cmd });
+                                    term = Terminators.Third;
+                                    phase = InternalState.Terminator;
+
+                                    break;
+                                }
+
+                                // Something Unknown!  Unwind
+                                m_state = State.Normal;  // Don't try to execute this
+                                phase = InternalState.Complete;
+                                return;
+                               
+
+                                // Other escape types (+VT52 types)
+                                // $N SS2
+                                // $O SS3
+                                // $P DCS
+                                // $\ ST
+                                // $X SOS
+                                // $^ PM
+                                // $_ APC
+                                // $c RIS
+                        }
+                        break;
+
+                    case InternalState.Parameters:
+                        cmd = m_commandBuffer[cursor];
+                        if (interParts.IndexOf((char)cmd) >= 0)
+                        {
+                            intermediates += (char)cmd;
+                            cursor++;
+                            break;
+                        }
+                        if (paramParts.IndexOf((char)cmd) >= 0)
+                        {
+                            parameters += (char)cmd;
+                            cursor++;
+                            break;
+                        }
+
+                        phase = InternalState.Terminator;
+                        break;
+                    case InternalState.Terminator:
+                        cmd = m_commandBuffer[cursor++];
+                        switch (term)
+                        {
+                            case Terminators.Third:
+                                terminator = new String(new char[] { (char)cmd });
+                                phase = InternalState.Complete;
+                                break;
+                            case Terminators.CSITerm:
+                                terminator = new String(new char[] { (char)cmd });
+                                phase = InternalState.Complete;
+                                break;
+                            case Terminators.OSC_ST_BEL:
+                                if (cmd == 0x07)
+                                {
+                                    terminator = new String(new char[] { (char)cmd });
+                                    phase = InternalState.Complete;
+                                    break;
+                                }
+                                goto case Terminators.OSC_ST;
+                            case Terminators.OSC_ST:
+                                if (cmd == EscapeCharacter)
+                                {
+                                    inEsc = true;
+                                    break;
+                                }
+                                if (inEsc && cmd == '\\')
+                                {
+                                    terminator = "\0x1b\\";
+                                    phase = InternalState.Complete;
+                                    break;
+                                }
+                                inEsc = false;
+                                parameters += (char)cmd;  // Eat the inner into the parameters
+                                break;
+                        }
+                        break;
                 }
 
-                int start = 1;
-                // Is this a one or two byte escape code?
-                if (m_commandBuffer[start] == LeftBracketCharacter)
-                {
-                    start++;
+                if (phase == InternalState.Complete)  // State machine ends
+                    break;
+            }
 
-                    // It is a two byte escape code, but we still need more data
-                    if (m_commandBuffer.Count < 3)
+
+
+
+
+
+
+
+
+            //if (m_commandBuffer.Count > 1)
+            //{
+
+            //    int start = 1, end = 0;
+            //    // Is this a one or two byte escape code (CSI)?
+            //    if (m_commandBuffer[start] == LeftBracketCharacter)
+            //    {
+            //        m_state = State.CommandCSI;  // Definately
+            //        start++;
+
+            //        // It is a two byte escape code, but we still need more data
+            //        if (m_commandBuffer.Count < 3)
+            //            return;
+
+            //         end = start;
+
+            //        if (m_commandBuffer.Count == 2 &&
+            //            IsValidOneCharacterCommand((char)m_commandBuffer[start]))
+            //            end = m_commandBuffer.Count - 1;
+
+            //        if (end == m_commandBuffer.Count)
+            //            return;  // More data needed
+
+            //        Decoder decoder = (this as IDecoder).Encoding.GetDecoder();
+            //        byte[] parameterData = new byte[end - start];
+            //        for (int i = 0; i < parameterData.Length; i++)
+            //            parameterData[i] = m_commandBuffer[start + i];
+
+            //        int parameterLength = decoder.GetCharCount(parameterData, 0, parameterData.Length);
+            //        char[] parameterChars = new char[parameterLength];
+            //        decoder.GetChars(parameterData, 0, parameterData.Length, parameterChars, 0);
+            //        String parameter = new String(parameterChars);
+
+            //        byte command = m_commandBuffer[end];
+
+            //        try
+            //        {
+            //            ProcessCommandCSI(command, parameter);
+            //        }
+            //        catch (Exception ex)
+            //        {
+            //            throw;  // Give's me a place for a breakpoint
+            //        }
+            //    }
+
+            // Is this an OSC (Operating System Command?)
+            // Is this a one or two byte escape code (CSI)?
+            //if (m_commandBuffer[start] == RightBracketCharacter)
+            //{
+            //    start++;
+
+            //    // It is a two byte escape code, but we still need more data
+            //    if (m_commandBuffer.Count < 3)
+            //    {
+            //        return;
+            //    }
+            //}
+
+
+            //bool insideQuotes = false;
+
+            //while (end < m_commandBuffer.Count && (IsValidParameterCharacter((char)m_commandBuffer[end]) || insideQuotes))
+            //{
+            //    if (m_commandBuffer[end] == '"')
+            //    {
+            //        insideQuotes = !insideQuotes;
+            //    }
+            //    end++;
+            //}
+
+            // Pass our command to the processor
+            try
+            {
+                switch (m_state)
+                {
+                    case State.CommandCSI:
+                        ProcessCommandCSI((byte)terminator[0], intermediates + parameters);
+                        break;
+                    case State.CommandOSC:
+                        ProcessCommandOSC(parameters, terminator);
+                        break;
+                    case State.CommandTwo:
+                        ProcessCommandTwo(terminator);
+                        break;
+                    case State.CommandThree:
+                        ProcessCommandThree(parameters, terminator);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw;
+            }
+
+            //if (count == cursor)
+            //{
+            //    m_commandBuffer.Clear();
+            //    m_state = State.Normal;
+            //}
+            //else
+            //{
+            //    m_commandBuffer.RemoveRange(0, cursor);
+            //    ProcessNormalInput(m_commandBuffer)
+            //}
+
+            cursor--;
+
+            // Remove the processed commands
+            if (m_commandBuffer.Count == cursor - 1)
+            {
+                // All command bytes processed, we can go back to normal handling
+                m_commandBuffer.Clear();
+                m_state = State.Normal;
+            }
+            else
+            {
+                bool returnToNormalState = true;
+                for (int i = cursor + 1; i < m_commandBuffer.Count; i++)
+                {
+                    if (m_commandBuffer[i] == EscapeCharacter)
                     {
-                        return;
-                    }
-                }
-
-                bool insideQuotes = false;
-                int end = start;
-                while (end < m_commandBuffer.Count && (IsValidParameterCharacter((char)m_commandBuffer[end]) || insideQuotes))
-                {
-                    if (m_commandBuffer[end] == '"')
-                    {
-                        insideQuotes = !insideQuotes;
-                    }
-                    end++;
-                }
-
-                if (m_commandBuffer.Count == 2 && IsValidOneCharacterCommand((char)m_commandBuffer[start]))
-                {
-                    end = m_commandBuffer.Count - 1;
-                }
-                if (end == m_commandBuffer.Count)
-                {
-                    // More data needed
-                    return;
-                }
-
-                Decoder decoder = (this as IDecoder).Encoding.GetDecoder();
-                byte[] parameterData = new byte[end - start];
-                for (int i = 0; i < parameterData.Length; i++)
-                {
-                    parameterData[i] = m_commandBuffer[start + i];
-                }
-                int parameterLength = decoder.GetCharCount(parameterData, 0, parameterData.Length);
-                char[] parameterChars = new char[parameterLength];
-                decoder.GetChars(parameterData, 0, parameterData.Length, parameterChars, 0);
-                String parameter = new String(parameterChars);
-
-                byte command = m_commandBuffer[end];
-
-                try
-                {
-                    ProcessCommand(command, parameter);
-                }
-                finally
-                {
-                    //System.Console.WriteLine ( "Remove the processed commands" );
-
-                    // Remove the processed commands
-                    if (m_commandBuffer.Count == end - 1)
-                    {
-                        // All command bytes processed, we can go back to normal handling
-                        m_commandBuffer.Clear();
-                        m_state = State.Normal;
+                        m_commandBuffer.RemoveRange(0, i);
+                        ProcessCommandBuffer();
+                        returnToNormalState = false;
                     }
                     else
                     {
-                        bool returnToNormalState = true;
-                        for (int i = end + 1; i < m_commandBuffer.Count; i++)
-                        {
-                            if (m_commandBuffer[i] == EscapeCharacter)
-                            {
-                                m_commandBuffer.RemoveRange(0, i);
-                                ProcessCommandBuffer();
-                                returnToNormalState = false;
-                            }
-                            else
-                            {
-                                ProcessNormalInput(m_commandBuffer[i]);
-                            }
-                        }
-                        if (returnToNormalState)
-                        {
-                            m_commandBuffer.Clear();
-
-                            m_state = State.Normal;
-                        }
+                        ProcessNormalInput(m_commandBuffer[i]);
                     }
                 }
+                if (returnToNormalState)
+                {
+                    m_commandBuffer.Clear();
+
+                    m_state = State.Normal;
+                }
             }
+                      
         }
 
         protected void ProcessNormalInput(byte _data)
@@ -301,7 +513,8 @@ namespace libVT100
                     }
                     break;
 
-                case State.Command:
+                case State.CommandCSI:
+                case State.CommandOSC:
                     AddToCommandBuffer(_data);
                     ProcessCommandBuffer();
                     break;
@@ -328,7 +541,10 @@ namespace libVT100
         }
 
         abstract protected void OnCharacters(char[] _characters);
-        abstract protected void ProcessCommand(byte _command, String _parameter);
+        abstract protected void ProcessCommandCSI(byte command, String _parameter);
+        abstract protected void ProcessCommandOSC(string parameters, string terminator);
+        abstract protected void ProcessCommandTwo(string terminator);
+        abstract protected void ProcessCommandThree(string parameters, string terminator);
 
         virtual public event DecoderOutputDelegate Output;
         virtual protected void OnOutput(byte[] _output)

@@ -127,7 +127,7 @@ namespace libVT100.Tests
             }
         }
         
-        override protected void ProcessCommand ( byte _command, String _parameter )
+        override protected void ProcessCommandCSI ( byte _command, String _parameter )
         {
             m_commands.Add ( new Command(_command, _parameter) );
         }
@@ -144,6 +144,22 @@ namespace libVT100.Tests
              Output( this, _data );
           }
        }
+
+        protected override void ProcessCommandOSC(string parameters, string terminator)
+        {
+            throw new NotImplementedException();
+        }
+
+        protected override void ProcessCommandTwo(string terminator)
+        {
+            throw new NotImplementedException();
+        }
+
+        protected override void ProcessCommandThree(string parameters, string terminator)
+        {
+            throw new NotImplementedException();
+        }
+
         override public event DecoderOutputDelegate Output;
     }
 }

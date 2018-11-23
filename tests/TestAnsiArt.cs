@@ -63,8 +63,8 @@ namespace libVT100.Tests
                 }
             }
             //System.Console.Write ( screen.ToString() );
-            Bitmap bitmap = screen.ToBitmap ( new Font("Courier New", 6) );
-            bitmap.Save ( "..\\build\\" + Path.GetFileNameWithoutExtension(_filename) + "_" + _encoding.EncodingName + ".png", System.Drawing.Imaging.ImageFormat.Png );
+           // Bitmap bitmap = screen.ToBitmap ( new Font("Courier New", 6) );
+           // bitmap.Save ( "..\\build\\" + Path.GetFileNameWithoutExtension(_filename) + "_" + _encoding.EncodingName + ".png", System.Drawing.Imaging.ImageFormat.Png );
 
             /*
               foreach ( Screen.Character ch in screen )

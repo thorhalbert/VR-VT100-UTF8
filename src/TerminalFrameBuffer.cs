@@ -68,7 +68,15 @@ namespace libVT100
         protected Point m_cursorPosition;
         protected Point m_savedCursorPosition;
         protected bool m_showCursor;
-        protected Glyph[,] m_screen;
+
+        // Manage Alternate Buffer
+        protected bool screenBufferIsPrimary = true;
+        protected Glyph[,] currentScreenBuffer;
+        protected Point savePrimaryCursor;
+        protected Glyph[,] primaryScreenBuffer;
+        protected Glyph[,] alternateScreenBuffer;
+        protected Point saveAlternativeCursor;
+
         protected GraphicAttributes m_currentAttributes;
 
         #endregion
@@ -85,6 +93,7 @@ namespace libVT100
                 SrollScreenUp,
                 UpdateScreen,
                 CursorMoved,
+                SetProperty,
             }
 
             public ActionTypes Action { get; }
@@ -128,6 +137,18 @@ namespace libVT100
             public int Column { get; }
             public int Row { get; }
             public Glyph Glyph { get; }
+        }
+
+        public class UIAction_SetProperty: UIActions
+        {
+            public PropertyTypes PropertyType { get; }
+            public string PropertyValue { get; }
+
+            public UIAction_SetProperty(PropertyTypes type, string value) : base(ActionTypes.SetProperty)
+            {
+                PropertyType = type;
+                PropertyValue = value;
+            }
         }
 
         public Glyph GetGlyph(int x, int y)
@@ -425,14 +446,14 @@ namespace libVT100
             }
             set
             {
-                if (m_screen == null || value.Width != Width || value.Height != Height)
+                if (currentScreenBuffer == null || value.Width != Width || value.Height != Height)
                 {
-                    m_screen = new Glyph[value.Width, value.Height];
+                    currentScreenBuffer = new Glyph[value.Width, value.Height];
                     for (int x = 0; x < Width; ++x)
                     {
                         for (int y = 0; y < Height; ++y)
                         {
-                            m_screen[x, y] = new Glyph();  // Don't let this do callbacks
+                            currentScreenBuffer[x, y] = new Glyph();  // Don't let this do callbacks
                         }
                     }
                     CursorPosition = new Point(0, 0);
@@ -444,7 +465,7 @@ namespace libVT100
         {
             get
             {
-                return m_screen.GetLength(0);
+                return currentScreenBuffer.GetLength(0);
             }
         }
 
@@ -452,7 +473,7 @@ namespace libVT100
         {
             get
             {
-                return m_screen.GetLength(1);
+                return currentScreenBuffer.GetLength(1);
             }
         }
 
@@ -476,21 +497,19 @@ namespace libVT100
             }
         }
 
-
-
         public Glyph this[int _column, int _row]
         {
             get
             {
                 CheckColumnRow(_column, _row);
 
-                return m_screen[_column, _row];
+                return currentScreenBuffer[_column, _row];
             }
             set
             {
                 CheckColumnRow(_column, _row);
 
-                m_screen[_column, _row] = value;
+                currentScreenBuffer[_column, _row] = value;
 
                 new UIAction_UpdateScreen(_column, _row, value);
 
@@ -538,7 +557,7 @@ namespace libVT100
             var h = Height;
 
             // Jettison Screen Buffer and regen
-            m_screen = null;
+            currentScreenBuffer = null;
             Size = new Size(w, h);
 
             m_showCursor = true;
@@ -644,16 +663,16 @@ namespace libVT100
 
             var keepScroll = new Glyph[Width];
             for (var col = 0; col < Width; col++)
-                keepScroll[col] = m_screen[col, 0];
+                keepScroll[col] = currentScreenBuffer[col, 0];
 
             // Move all lines up - top line goes away, bottom line is blank
 
             for (var row = 1; row < Height; row++)
                 for (var col = 0; col < Width; col++)
-                    m_screen[col, row - 1] = m_screen[col, row];
+                    currentScreenBuffer[col, row - 1] = currentScreenBuffer[col, row];
 
             for (var col = 0; col < Width; col++)
-                m_screen[col, Height - 1] = new Glyph();
+                currentScreenBuffer[col, Height - 1] = new Glyph();
 
             new UIAction_ScrollScreenUp(keepScroll);
         }
@@ -713,7 +732,7 @@ namespace libVT100
                 }
                 switch (ch)
                 {
-                    case '\n':      // Linefeed
+                    case '\n':      // Linefeed, FF, VT
                         (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1);
                         return;
                     case '\r':      // Return
@@ -731,6 +750,10 @@ namespace libVT100
                         return;
                     case '\x07':    // BEL
                         return;
+                        // SI
+                        // SO
+                        // ENQ
+                        // BEL
                 }
 
             }
@@ -868,23 +891,53 @@ namespace libVT100
 
         void IAnsiDecoderClient.ModeChanged(IAnsiDecoder _sender, AnsiMode _mode)
         {
+            Size cur;
             switch (_mode)
             {
                 case AnsiMode.HideCursor:
                     m_showCursor = false;
+                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
                     break;
 
                 case AnsiMode.ShowCursor:
                     m_showCursor = true;
+                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
+                    break;
+                case AnsiMode.SwitchToMainBuffer:
+                    if (screenBufferIsPrimary) return;
+                    alternateScreenBuffer = currentScreenBuffer;
+                    saveAlternativeCursor = m_cursorPosition;
+                    cur = Size;
+                    currentScreenBuffer = primaryScreenBuffer;
+                    m_cursorPosition = savePrimaryCursor;
+                    Size = cur;
+                    DoRefresh(true);
+                    screenBufferIsPrimary = true;
+                    break;
+                case AnsiMode.SwitchToAlternateBuffer:
+                    if (!screenBufferIsPrimary) return;
+                    primaryScreenBuffer = currentScreenBuffer;
+                    savePrimaryCursor = m_cursorPosition;
+                    cur = Size;
+                    currentScreenBuffer = primaryScreenBuffer;
+                    m_cursorPosition = savePrimaryCursor;
+                    Size = cur;
+                    DoRefresh(true);
+                    screenBufferIsPrimary = false;
                     break;
             }
 
-            new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
+
         }
 
         Point IAnsiDecoderClient.GetCursorPosition(IAnsiDecoder _sender)
         {
             return new Point(m_cursorPosition.X + 1, m_cursorPosition.Y + 1);
+        }
+
+        void IAnsiDecoderClient.SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value)
+        {
+            new UIAction_SetProperty(type, value);
         }
 
         void IAnsiDecoderClient.SetGraphicRendition(IAnsiDecoder _sender, GraphicRendition[] _commands)
@@ -1069,7 +1122,7 @@ namespace libVT100
         #region Misc
         void IDisposable.Dispose()
         {
-            m_screen = null;
+            currentScreenBuffer = null;
         }
         #endregion
     }

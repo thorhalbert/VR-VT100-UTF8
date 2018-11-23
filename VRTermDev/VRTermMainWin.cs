@@ -30,6 +30,8 @@ namespace VRTermDev
         {
             InitializeComponent();
 
+            screenInfo.Text = statusLabel.Text = terminalLegend.Text = "";
+
             //SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
             screenFont = new Font(fontName, fontSize);
@@ -114,15 +116,17 @@ namespace VRTermDev
             client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
 
             screen = new libVT100.TerminalFrameBuffer(10, 10);  // This will get set to reality quickly
-
+           
             keyboardStream = new KeyboardStream();
             var screenS = new ScreenStream();
 
             terminalFrameBuffer.BoundScreen = screen;
+            terminalFrameBuffer.LegendLabel = terminalLegend;
 
             terminalFrameBuffer.Init();
 
             vt100 = new AnsiDecoder();
+            vt100.Output += Vt100_Output;
             screenS.InjectTo = vt100;
             vt100.Encoding = new UTF8Encoding(); // Encoding.GetEncoding("utf8");
             vt100.Subscribe(screen);
@@ -152,6 +156,11 @@ namespace VRTermDev
             shell.Start();
         }
 
+        // This is terminal output (like from report escape sequences - should be shunted back into the input buffer)
+        private void Vt100_Output(IDecoder _decoder, byte[] _output)
+        {
+        
+        }
 
         private void disconnectButton_Click(object sender, EventArgs e)
         {
