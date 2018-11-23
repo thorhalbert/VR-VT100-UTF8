@@ -124,6 +124,11 @@ namespace libVT100
         AlternateKeypad,
         SwitchToMainBuffer,
         SwitchToAlternateBuffer,
+        ApplicationKeypad_DECKPAM,
+        NormalKeypad_DECKPNM,
+        SwitchG0toVT100_UK,
+        SwitchG0toVT100_US,
+        SwitchG0toVT100_LineDrawing,
     }
 
     public enum PropertyTypes
@@ -139,9 +144,9 @@ namespace libVT100
         void SaveCursor(IAnsiDecoder _sernder);
         void RestoreCursor(IAnsiDecoder _sender);
         Size GetSize(IAnsiDecoder _sender);
-        void MoveCursor(IAnsiDecoder _sender, Direction _direction, int _amount);
-        void MoveCursorToBeginningOfLineBelow(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine);
-        void MoveCursorToBeginningOfLineAbove(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine);
+        void MoveCursor(IAnsiDecoder _sender, Direction _direction, int _amount, bool scroll);
+        void MoveCursorToBeginningOfLineBelow(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll);
+        void MoveCursorToBeginningOfLineAbove(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll);
         void MoveCursorToColumn(IAnsiDecoder _sender, int _columnNumber);
         void MoveCursorTo(IAnsiDecoder _sender, Point _position);
         void ClearScreen(IAnsiDecoder _sender, ClearDirection _direction);

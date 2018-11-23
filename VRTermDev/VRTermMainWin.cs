@@ -114,7 +114,10 @@ namespace VRTermDev
                 pass_textbox.Enabled = false;
 
             client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
-
+            client.KeepAliveInterval = new TimeSpan(0, 2, 0);
+            client.HostKeyReceived += Client_HostKeyReceived;
+            client.ErrorOccurred += Client_ErrorOccurred;
+          
             screen = new libVT100.TerminalFrameBuffer(10, 10);  // This will get set to reality quickly
            
             keyboardStream = new KeyboardStream();
@@ -152,14 +155,26 @@ namespace VRTermDev
             }
 
             var shell = client.CreateShell(keyboardStream, screenS, screenS);  // stdin, stdout, stderr
-
+       
             shell.Start();
+        }
+
+        private void Client_ErrorOccurred(object sender, Renci.SshNet.Common.ExceptionEventArgs e)
+        {
+            MessageBox.Show(this, "SSH Connection Error: " + e.Exception.Message, "SSH Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+            disconnectButton_Click(this, new EventArgs());
+        }
+
+        private void Client_HostKeyReceived(object sender, Renci.SshNet.Common.HostKeyEventArgs e)
+        {
+          
         }
 
         // This is terminal output (like from report escape sequences - should be shunted back into the input buffer)
         private void Vt100_Output(IDecoder _decoder, byte[] _output)
         {
-        
+            keyboardStream.Inject(_output);
         }
 
         private void disconnectButton_Click(object sender, EventArgs e)

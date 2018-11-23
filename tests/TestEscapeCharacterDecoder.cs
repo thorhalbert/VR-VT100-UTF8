@@ -160,6 +160,11 @@ namespace libVT100.Tests
             throw new NotImplementedException();
         }
 
+        protected override void ProcessCommandDCS(string parameters)
+        {
+            throw new NotImplementedException();
+        }
+
         override public event DecoderOutputDelegate Output;
     }
 }

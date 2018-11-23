@@ -635,7 +635,7 @@ namespace libVT100
                     CursorPosition = new Point(0, m_cursorPosition.Y + 1);
                 else
                 {
-                    ScrollDownOne();
+                    ScrollScreen(1);
                     CursorPosition = new Point(0, Height - 1);
                 }
             }
@@ -657,8 +657,11 @@ namespace libVT100
             }
         }
 
-        private void ScrollDownOne()
+        private void ScrollScreen(int lines)
         {
+            if (lines<0)
+                throw new Exception("Can't scroll up yet");
+
             // Save the top line
 
             var keepScroll = new Glyph[Width];
@@ -677,25 +680,31 @@ namespace libVT100
             new UIAction_ScrollScreenUp(keepScroll);
         }
 
-        public void CursorDown()
+        public void CursorDown(bool scroll)
         {
             if (m_cursorPosition.Y + 1 >= Height)
             {
+                if (!scroll) return;
+
                 // Hit bottom.  Must scroll
 
-                ScrollDownOne();
+                ScrollScreen(1);
                 return;  // We scrolled instead of moving cursor down, so no change there
-
-                //throw new Exception("Can not move further down!");
             }
+
             CursorPosition = new Point(m_cursorPosition.X, m_cursorPosition.Y + 1);
         }
 
-        public void CursorUp()
+        public void CursorUp(bool scroll)
         {
             if (m_cursorPosition.Y - 1 < 0)
             {
-                throw new Exception("Can not move further up!");
+                if (!scroll) return;
+
+                // Have to reverse scroll - which we don't know how to do yet
+
+                ScrollScreen(-1);
+               
             }
             CursorPosition = new Point(m_cursorPosition.X, m_cursorPosition.Y - 1);
         }
@@ -733,7 +742,7 @@ namespace libVT100
                 switch (ch)
                 {
                     case '\n':      // Linefeed, FF, VT
-                        (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1);
+                        (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1, true);
                         return;
                     case '\r':      // Return
                         (this as IAnsiDecoderClient).MoveCursorToColumn(_sender, 0);
@@ -774,14 +783,14 @@ namespace libVT100
             return Size;
         }
 
-        void IAnsiDecoderClient.MoveCursor(IAnsiDecoder _sender, Direction _direction, int _amount)
+        void IAnsiDecoderClient.MoveCursor(IAnsiDecoder _sender, Direction _direction, int _amount, bool scroll)
         {
             switch (_direction)
             {
                 case Direction.Up:
                     while (_amount > 0)
                     {
-                        CursorUp();
+                        CursorUp(scroll);
                         _amount--;
                     }
                     break;
@@ -789,7 +798,7 @@ namespace libVT100
                 case Direction.Down:
                     while (_amount > 0)
                     {
-                        CursorDown();
+                        CursorDown(scroll);
                         _amount--;
                     }
                     break;
@@ -812,22 +821,22 @@ namespace libVT100
             }
         }
 
-        void IAnsiDecoderClient.MoveCursorToBeginningOfLineBelow(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine)
+        void IAnsiDecoderClient.MoveCursorToBeginningOfLineBelow(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll)
         {
             m_cursorPosition.X = 0;
             while (_lineNumberRelativeToCurrentLine > 0)
             {
-                CursorDown();
+                CursorDown(scroll);
                 _lineNumberRelativeToCurrentLine--;
             }
         }
 
-        void IAnsiDecoderClient.MoveCursorToBeginningOfLineAbove(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine)
+        void IAnsiDecoderClient.MoveCursorToBeginningOfLineAbove(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll)
         {
             m_cursorPosition.X = 0;
             while (_lineNumberRelativeToCurrentLine > 0)
             {
-                CursorUp();
+                CursorUp(scroll);
                 _lineNumberRelativeToCurrentLine--;
             }
         }
@@ -880,13 +889,12 @@ namespace libVT100
 
         void IAnsiDecoderClient.ScrollPageUpwards(IAnsiDecoder _sender, int _linesToScroll)
         {
-            for (var i = 0; i < _linesToScroll; i++)
-                ScrollDownOne();
+            ScrollScreen(_linesToScroll);
         }
 
         void IAnsiDecoderClient.ScrollPageDownwards(IAnsiDecoder _sender, int _linesToScroll)
         {
-
+            ScrollScreen(-_linesToScroll);
         }
 
         void IAnsiDecoderClient.ModeChanged(IAnsiDecoder _sender, AnsiMode _mode)

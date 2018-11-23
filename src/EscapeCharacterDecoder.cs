@@ -2,17 +2,29 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using System.Diagnostics;
 
 namespace libVT100
 {
     public abstract class EscapeCharacterDecoder : IDecoder
     {
-        public const byte EscapeCharacter = 0x1B;
-        public const byte LeftBracketCharacter = 0x5B;
-        public const byte RightBracketCharacter = 0x5D;
-        public const byte BackslashCharacter = 0x5C;
+        public const byte ESC = 0x1B;
+        public const byte LBRACK = 0x5B;
+        public const byte RBRACK = 0x5D;
+        public const byte BACKSLASH = 0x5C;
         public const byte XonCharacter = 17;
         public const byte XoffCharacter = 19;
+
+        public const byte COMMAND_CSI = LBRACK;
+        public const byte COMMAND_ST = BACKSLASH;
+        public const byte COMMAND_SS2 = (int)'N';
+        public const byte COMMAND_SS3 = (int)'O';
+        public const byte COMMAND_DCS = (int)'P';
+        public const byte COMMAND_OSC = RBRACK;
+        public const byte COMMAND_APC = (int)'_';
+
+
+
 
         protected enum State
         {
@@ -20,7 +32,8 @@ namespace libVT100
             CommandCSI,
             CommandTwo,
             CommandThree,
-            CommandOSC
+            CommandOSC,
+            CommandDCS
         }
         protected State m_state;
         protected Encoding m_encoding;
@@ -63,7 +76,7 @@ namespace libVT100
             //var interMed = "0123456789 ;!\"#$%&'()*+,-./";
             const string interMed = "0123456789;?>=!#";
             return interMed.IndexOf(_c) >= 0;
-           
+
             //return (Char.IsNumber( _c ) || _c == '(' || _c == ')' || _c == ';' || _c == '"' || _c == '?');
             //return (Char.IsNumber(_c) || _c == ';' || _c == '"' || _c == '?');
         }
@@ -139,7 +152,7 @@ namespace libVT100
 
             // Internal check
 
-            if (m_commandBuffer[cursor++] != EscapeCharacter)  // Internal Assert
+            if (m_commandBuffer[cursor++] != ESC)  // Internal Assert
             {
                 throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
             }
@@ -156,22 +169,31 @@ namespace libVT100
                         var cmd = m_commandBuffer[cursor++];
                         switch (cmd)
                         {
-                            case LeftBracketCharacter:  // $[ CSI
+                            case COMMAND_CSI:  // $[ CSI
                                 m_state = State.CommandCSI;
                                 term = Terminators.CSITerm;
                                 phase = InternalState.Parameters;
                                 break;
 
-                            case RightBracketCharacter: // $] OSC
+                            case COMMAND_OSC: // $] OSC
                                 m_state = State.CommandOSC;
                                 term = Terminators.OSC_ST_BEL;
                                 intermediates = null;
                                 phase = InternalState.Terminator;
                                 break;
 
+                            case COMMAND_DCS:
+                                m_state = State.CommandDCS;
+                                term = Terminators.OSC_ST;
+                                intermediates = null;
+                                phase = InternalState.Terminator;
+                                break;
+
+                            // The other two letter command types will get caught below
+
                             default:
                                 // A Two Letter Escape Sequene
-                                if (twoLetter.IndexOf((char)cmd)>=0)
+                                if (twoLetter.IndexOf((char)cmd) >= 0)
                                 {
                                     m_state = State.CommandTwo;
                                     terminator = new String(new char[] { (char)cmd });
@@ -194,7 +216,7 @@ namespace libVT100
                                 m_state = State.Normal;  // Don't try to execute this
                                 phase = InternalState.Complete;
                                 return;
-                               
+
 
                                 // Other escape types (+VT52 types)
                                 // $N SS2
@@ -246,7 +268,7 @@ namespace libVT100
                                 }
                                 goto case Terminators.OSC_ST;
                             case Terminators.OSC_ST:
-                                if (cmd == EscapeCharacter)
+                                if (cmd == ESC)
                                 {
                                     inEsc = true;
                                     break;
@@ -363,11 +385,14 @@ namespace libVT100
                     case State.CommandThree:
                         ProcessCommandThree(parameters, terminator);
                         break;
+                    case State.CommandDCS:
+                        ProcessCommandDCS(parameters);
+                        break;
                 }
             }
             catch (Exception ex)
             {
-                throw;
+                Debug.WriteLine("Unsupported: " + ex.Message);
             }
 
             //if (count == cursor)
@@ -395,7 +420,7 @@ namespace libVT100
                 bool returnToNormalState = true;
                 for (int i = cursor + 1; i < m_commandBuffer.Count; i++)
                 {
-                    if (m_commandBuffer[i] == EscapeCharacter)
+                    if (m_commandBuffer[i] == ESC)
                     {
                         m_commandBuffer.RemoveRange(0, i);
                         ProcessCommandBuffer();
@@ -413,13 +438,13 @@ namespace libVT100
                     m_state = State.Normal;
                 }
             }
-                      
+
         }
 
         protected void ProcessNormalInput(byte _data)
         {
             //System.Console.WriteLine ( "ProcessNormalInput: {0:X2}", _data );
-            if (_data == EscapeCharacter)
+            if (_data == ESC)
             {
                 throw new Exception("Internal error, ProcessNormalInput was passed an escape character, please report this bug to the author.");
             }
@@ -488,7 +513,7 @@ namespace libVT100
             switch (m_state)
             {
                 case State.Normal:
-                    if (_data[0] == EscapeCharacter)
+                    if (_data[0] == ESC)
                     {
                         AddToCommandBuffer(_data);
                         ProcessCommandBuffer();
@@ -496,7 +521,7 @@ namespace libVT100
                     else
                     {
                         int i = 0;
-                        while (i < _data.Length && _data[i] != EscapeCharacter)
+                        while (i < _data.Length && _data[i] != ESC)
                         {
                             ProcessNormalInput(_data[i]);
                             i++;
@@ -545,6 +570,7 @@ namespace libVT100
         abstract protected void ProcessCommandOSC(string parameters, string terminator);
         abstract protected void ProcessCommandTwo(string terminator);
         abstract protected void ProcessCommandThree(string parameters, string terminator);
+        abstract protected void ProcessCommandDCS(string parameters);
 
         virtual public event DecoderOutputDelegate Output;
         virtual protected void OnOutput(byte[] _output)
