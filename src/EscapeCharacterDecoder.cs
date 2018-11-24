@@ -353,84 +353,6 @@ namespace libVT100
                     break;
             }
 
-
-
-
-
-
-
-
-
-            //if (m_commandBuffer.Count > 1)
-            //{
-
-            //    int start = 1, end = 0;
-            //    // Is this a one or two byte escape code (CSI)?
-            //    if (m_commandBuffer[start] == LeftBracketCharacter)
-            //    {
-            //        m_state = State.CommandCSI;  // Definately
-            //        start++;
-
-            //        // It is a two byte escape code, but we still need more data
-            //        if (m_commandBuffer.Count < 3)
-            //            return;
-
-            //         end = start;
-
-            //        if (m_commandBuffer.Count == 2 &&
-            //            IsValidOneCharacterCommand((char)m_commandBuffer[start]))
-            //            end = m_commandBuffer.Count - 1;
-
-            //        if (end == m_commandBuffer.Count)
-            //            return;  // More data needed
-
-            //        Decoder decoder = (this as IDecoder).Encoding.GetDecoder();
-            //        byte[] parameterData = new byte[end - start];
-            //        for (int i = 0; i < parameterData.Length; i++)
-            //            parameterData[i] = m_commandBuffer[start + i];
-
-            //        int parameterLength = decoder.GetCharCount(parameterData, 0, parameterData.Length);
-            //        char[] parameterChars = new char[parameterLength];
-            //        decoder.GetChars(parameterData, 0, parameterData.Length, parameterChars, 0);
-            //        String parameter = new String(parameterChars);
-
-            //        byte command = m_commandBuffer[end];
-
-            //        try
-            //        {
-            //            ProcessCommandCSI(command, parameter);
-            //        }
-            //        catch (Exception ex)
-            //        {
-            //            throw;  // Give's me a place for a breakpoint
-            //        }
-            //    }
-
-            // Is this an OSC (Operating System Command?)
-            // Is this a one or two byte escape code (CSI)?
-            //if (m_commandBuffer[start] == RightBracketCharacter)
-            //{
-            //    start++;
-
-            //    // It is a two byte escape code, but we still need more data
-            //    if (m_commandBuffer.Count < 3)
-            //    {
-            //        return;
-            //    }
-            //}
-
-
-            //bool insideQuotes = false;
-
-            //while (end < m_commandBuffer.Count && (IsValidParameterCharacter((char)m_commandBuffer[end]) || insideQuotes))
-            //{
-            //    if (m_commandBuffer[end] == '"')
-            //    {
-            //        insideQuotes = !insideQuotes;
-            //    }
-            //    end++;
-            //}
-
             // Pass our command to the processor
             try
             {
@@ -458,18 +380,9 @@ namespace libVT100
                 Debug.WriteLine("Unsupported: " + ex.Message);
             }
 
-            //if (count == cursor)
-            //{
-            //    m_commandBuffer.Clear();
-            //    m_state = State.Normal;
-            //}
-            //else
-            //{
-            //    m_commandBuffer.RemoveRange(0, cursor);
-            //    ProcessNormalInput(m_commandBuffer)
-            //}
-
             cursor--;
+
+            // IO State machine needs work
 
             // Remove the processed commands
             if (m_commandBuffer.Count == cursor - 1)

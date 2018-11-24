@@ -173,6 +173,22 @@ namespace VRTermDev
 
             BoundScreen.DoRefresh(false);
         }
+
+        public Point EstimateScreenSize()
+        {
+            var tSize = this.Size;
+            var gr = this.CreateGraphics();
+            var charS = gr.MeasureString("M", TerminalFont);
+
+            charWidth = Convert.ToInt32(charS.Width + .5) - 6;  // This is HACK!  Need to figure out how to deal with font margins
+            charHeight = Convert.ToInt32(charS.Height + .5);
+            charSize = new Size(charWidth, charHeight);
+
+            termWidth = tSize.Width / charWidth;
+            termHeight = tSize.Height / charHeight;
+
+            return new Point(termWidth, termHeight);
+        }
         #endregion
 
         #region Action Handlers for Frame Buffer

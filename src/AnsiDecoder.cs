@@ -186,6 +186,11 @@ namespace libVT100
                     OnSaveCursor();
                     break;
 
+                case 't':  // Window manipulation EWMH
+                    DoCSI_WindowManipulation(_parameter);
+                    break;
+
+
                 case 'u':   // CSI u     Restore cursor (SCORC, also ANSI.SYS).
                     OnRestoreCursor();
                     break;
@@ -213,6 +218,63 @@ namespace libVT100
                     Debug.WriteLine("Unimplemented CSI: Command=" + _command + " Param=" + _parameter);
                     break;
             }
+        }
+
+        private void DoCSI_WindowManipulation(string parameter)
+        {
+            // These are all explicit commands with fixed parameters
+            switch (parameter)
+            {
+                case "18":  // Report size of text area in characters
+                    //var result18 = new byte[] { ESC, COMMAND_CSI, (int)'8', (int)'n' };
+                    //return;
+                case "19":  // Report the size of the screen in characters
+                    //var result19 = new byte[] { ESC, COMMAND_CSI, (int)'9', (int)'n' };
+                    //return;
+
+                case "1":   // Deiconify Window
+                case "2":   // Iconify window
+                case "5":   // Raise to front of stack
+                case "6":   // Lower to bottom of stack
+                case "7":   // Refresh the window
+                case "9;0": // Restore maximized window
+                case "9;1": // Maximize Window
+                case "9;2": // Maximize Window vertically
+                case "9;3": // Maximize Window horizontally
+                case "10;0": // Undo Full Screen Mode
+                case "10;1": // Change to full-screen
+                case "10;2": // Toggle-full Screen
+                case "11":  // Report xterm Window State
+                case "13":  // Report text area position
+                case "14":  // Report text area size in pixels
+                case "14;2": // Report size of window size in pixels
+                case "15":  // Report size of the screen in pixels
+                case "16":  // Report character size in pixels                           
+                case "20":  // Report window's icon label
+                case "21":  // Report Windows title
+                case "22;0": // Save xterm icon and window on stack
+                case "22;1": // Save xterm icon title on stack
+                case "22;2": // Save window title on stack
+                case "23;0": // Restore icon and window title from stack
+                case "23;1": // Resore icon title from stack
+                case "23;2": // Restore window title from stack
+                case "24":   // >=24 is resize DECSLPP
+                    Debug.WriteLine("Unimplemented Window Manipulation: " + parameter);
+                    return;
+            }
+            // While these have a fixed initial parameter and variable arguments in later parameters
+            var parms = parameter.Split(';');
+            switch (parms[0])
+            {
+                case "3":   // Move WIndow to x,y (parm1=X, parm2=Y)
+                case "4":   // Resize window (parm1=height, parm2=width)
+                case "8":   // Resize text area (parm1=height, parm2=width)
+                    Debug.WriteLine("Unimplemented Window Manipulation: " + parameter);
+                    return;
+            }
+
+            Debug.WriteLine("Unimplemented (and unknown) Window Manipulation: " + parameter);
+            return;
         }
 
         private void DoCSI_DSR(string _parameter)

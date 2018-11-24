@@ -102,6 +102,22 @@ namespace VRTermDev
             checkLoginState();
         }
 
+        /*
+         * 6.7.  Window Dimension Change Message
+
+   When the window (terminal) size changes on the client side, it MAY
+   send a message to the other side to inform it of the new dimensions.
+
+      byte      SSH_MSG_CHANNEL_REQUEST
+      uint32    recipient channel
+      string    "window-change"
+      boolean   FALSE
+      uint32    terminal width, columns
+      uint32    terminal height, rows
+      uint32    terminal width, pixels
+      uint32    terminal height, pixels
+         */
+
         private void connectButton_Click(object sender, EventArgs e)
         {
             if (client != null && client.IsConnected) return;
@@ -111,17 +127,20 @@ namespace VRTermDev
 
             host_textbox.Enabled =
                 user_textbox.Enabled =
-                pass_textbox.Enabled = false;
-
-            client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text);
-            client.KeepAliveInterval = new TimeSpan(0, 2, 0);
+                pass_textbox.Enabled = false;                            
+        
+            client = new SshClient(host_textbox.Text, user_textbox.Text, pass_textbox.Text)
+            {
+                KeepAliveInterval = new TimeSpan(0, 2, 0)
+            };
             client.HostKeyReceived += Client_HostKeyReceived;
             client.ErrorOccurred += Client_ErrorOccurred;
-          
-            screen = new libVT100.TerminalFrameBuffer(10, 10);  // This will get set to reality quickly
-           
+                     
             keyboardStream = new KeyboardStream();
             var screenS = new ScreenStream();
+
+            var tSize = terminalFrameBuffer.EstimateScreenSize();
+            screen = new libVT100.TerminalFrameBuffer(tSize.X, tSize.Y);
 
             terminalFrameBuffer.BoundScreen = screen;
             terminalFrameBuffer.LegendLabel = terminalLegend;
@@ -154,9 +173,17 @@ namespace VRTermDev
                 terminalFrameBuffer.Focus();
             }
 
-            var shell = client.CreateShell(keyboardStream, screenS, screenS);  // stdin, stdout, stderr
+            var termModes = new Dictionary<Renci.SshNet.Common.TerminalModes, uint>();
+           
+            var shell = client.CreateShell(keyboardStream, screenS, screenS,
+                "VRTerm",(uint) tSize.X, (uint) tSize.Y, (uint) terminalFrameBuffer.Width, (uint) terminalFrameBuffer.Height, termModes);
+               
+              
+             
        
             shell.Start();
+
+       
         }
 
         private void Client_ErrorOccurred(object sender, Renci.SshNet.Common.ExceptionEventArgs e)
