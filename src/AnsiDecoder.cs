@@ -141,6 +141,19 @@ namespace libVT100
                     DoCSI_DECSET(_command, _parameter);
                     break;
 
+                case 'g':  // CSI Ps g  Tab Clear (TBC).
+                    switch (_parameter)
+                    {
+                        case "":
+                        case "0":
+                            ClearTab(false);
+                            break;
+                        case "3":
+                            ClearTab(true);
+                            break;
+                    }
+                    break;
+                    
                 case 'l':  // CSI ? Pm l - DEC Private Mode Reset(DECRST).
                     DoCSI_DECRST(_command, _parameter);
                     break;
@@ -499,7 +512,9 @@ namespace libVT100
                 case "E":  // NEL (Next Line - with scroll)
                     OnMoveCursorToBeginningOfLineBelow(1, true);
                     return;
-
+                case "H":  // Tab Set(HTS  is 0x88). - need to handle the 8 bit version of this
+                    SetTab();
+                    break;
                 case "=":  // ESC =     Application Keypad (DECKPAM).
                     OnModeChanged(AnsiMode.ApplicationKeypad_DECKPAM);
                     break;
@@ -700,6 +715,21 @@ namespace libVT100
             foreach (IAnsiDecoderClient client in m_listeners)
             {
                 client.Characters(this, _characters);
+            }
+        }
+
+        protected void ClearTab(bool ClearAll)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.ClearTab(this, ClearAll);
+            }
+        }
+        protected void SetTab()
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetTab(this);
             }
         }
 

@@ -80,6 +80,69 @@ namespace libVT100
         protected GraphicAttributes m_currentAttributes;
 
         #endregion
+        #region Saved Scrolling Buffer Management
+        protected List<Glyph[]> UpperBuffer = new List<Glyph[]>();
+        protected List<Glyph[]> LowerBuffer = new List<Glyph[]>();
+
+        // Always will succeed even if we push stuff of top of lists
+        private void pushOntoBuffer(Glyph[] line, bool lower)
+        {
+            var outLine = squashLine(line);
+
+            if (lower) LowerBuffer.Add(outLine);
+            else UpperBuffer.Add(outLine);
+
+        }
+
+        private Glyph[] squashLine(Glyph[] line)
+        {
+            return line;
+            // var buf = new List<Glyph>();
+            // return buf.ToArray();
+        }
+        #endregion
+        #region Tab Handling
+        private bool[] TabStops = null;
+
+        public void ClearTabStops()
+        {
+            for (var i = 0; i < TabStops.Length; i++)
+                TabStops[i] = false;
+        }
+
+        public void SetStdTabStops()
+        {
+            for (var i = 1; i < 1024; i++)
+                TabStops[i] = (i % 8) == 0;
+        }
+
+        public void SetTabStop(int column, bool value)
+        {
+            TabStops[column] = value;
+        }
+
+        public int NextTabStop(int column, int max)
+        {
+            for (int i = column + 1; i < max; i++)
+                if (TabStops[i]) return i;
+
+            return max - 1;  // No stop between here and the end
+        }
+
+        public void SetTab(IAnsiDecoder _sender)
+        {
+            SetTabStop(CursorPosition.X, true);
+        }
+
+        public void ClearTab(IAnsiDecoder _sender, bool ClearAll)
+        {
+            if (ClearAll)
+                ClearTabStops();
+            else
+                SetTabStop(CursorPosition.Y, false);
+        }
+
+        #endregion
         #region UI Actions Messages
         public event Action<List<UIActions>> OnUIAction;
         private static List<UIActions> UIActionQueue = new List<UIActions>();
@@ -139,7 +202,7 @@ namespace libVT100
             public Glyph Glyph { get; }
         }
 
-        public class UIAction_SetProperty: UIActions
+        public class UIAction_SetProperty : UIActions
         {
             public PropertyTypes PropertyType { get; }
             public string PropertyValue { get; }
@@ -446,6 +509,13 @@ namespace libVT100
             }
             set
             {
+                // We need a separate hard and soft reset - this is sort of a wierd constructor
+                if (TabStops == null)
+                {
+                    TabStops = new bool[1024];
+                    SetStdTabStops();
+                }
+
                 if (currentScreenBuffer == null || value.Width != Width || value.Height != Height)
                 {
                     currentScreenBuffer = new Glyph[value.Width, value.Height];
@@ -659,7 +729,7 @@ namespace libVT100
 
         private void ScrollScreen(int lines)
         {
-            if (lines<0)
+            if (lines < 0)
                 throw new Exception("Can't scroll up yet");
 
             // Save the top line
@@ -704,7 +774,7 @@ namespace libVT100
                 // Have to reverse scroll - which we don't know how to do yet
 
                 ScrollScreen(-1);
-               
+
             }
             CursorPosition = new Point(m_cursorPosition.X, m_cursorPosition.Y - 1);
         }
@@ -751,7 +821,9 @@ namespace libVT100
                         CursorBackward();
                         return;
                     case '\t':      // Tab
-                        while (CursorPosition.X % 8 != 0)
+                        // Need real tab stops
+                        var nextT = NextTabStop(CursorPosition.X, Width);
+                        for (var i = 0; i < nextT; i++)
                         {
                             this[CursorPosition] = new Glyph(ch, m_currentAttributes); ;
                             CursorForward();
@@ -1132,6 +1204,7 @@ namespace libVT100
         {
             currentScreenBuffer = null;
         }
+
         #endregion
     }
 }

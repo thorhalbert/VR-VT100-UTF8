@@ -12,6 +12,7 @@ namespace libVT100
         public const byte LBRACK = 0x5B;
         public const byte RBRACK = 0x5D;
         public const byte BACKSLASH = 0x5C;
+
         public const byte XonCharacter = 17;
         public const byte XoffCharacter = 19;
 
@@ -23,9 +24,23 @@ namespace libVT100
         public const byte COMMAND_OSC = RBRACK;
         public const byte COMMAND_APC = (int)'_';
 
+        // 8-bit versions of the commands
+        public const byte C1_SS2 = 0x8e;
+        public const byte C1_SS3 = 0x8f;
+        public const byte C1_DCS = 0x90;
+        public const byte C1_CSI = 0x9b;
+        public const byte C1_ST = 0x9c;
+        public const byte C1_OSC = 0x9d;
+        public const byte C1_SOS = 0x98;
+        public const byte C1_PM = 0x9e;
+        public const byte C1_APC = 0x9f;
 
-
-
+        // 1 byte 8-bit commands
+        public const byte C1_IND = 0x84;
+        public const byte C1_NEL = 0x85;
+        public const byte C1_HTS = 0x88;
+        public const byte C1_RI = 0x8d;
+       
         protected enum State
         {
             Normal,
@@ -109,6 +124,7 @@ namespace libVT100
 
         private enum InternalState
         {
+            C1Command,
             Command,
             Parameters,
             Terminator,
@@ -150,11 +166,49 @@ namespace libVT100
 
             if (count < 2) return;  // Not enough data
 
-            // Internal check
-
-            if (m_commandBuffer[cursor++] != ESC)  // Internal Assert
+            // Allow the full 8 bit commands too
+            byte skipFirst = 0;
+            var first = m_commandBuffer[cursor++];
+            switch (first)
             {
-                throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
+                case ESC:
+                    skipFirst = 0;
+                    break;
+                case C1_CSI:
+                    skipFirst = COMMAND_CSI;
+                    break;
+                case C1_OSC:
+                    skipFirst = COMMAND_OSC;
+                    break;
+                case C1_DCS:
+                    skipFirst = COMMAND_DCS;
+                    break;
+
+                // 1 byte commands
+                case C1_IND:
+                    m_state = State.CommandTwo;
+                    phase = InternalState.Complete;
+                    terminator = "D";
+                    break;
+                case C1_NEL:
+                    m_state = State.CommandTwo;
+                    phase = InternalState.Complete;
+                    terminator = "E";
+                    break;
+                case C1_HTS:
+                    m_state = State.CommandTwo;
+                    phase = InternalState.Complete;
+                    terminator = "H";
+                    break;
+                case C1_RI:
+                    m_state = State.CommandTwo;
+                    phase = InternalState.Complete;
+                    terminator = "M";
+                    break;
+
+
+                default:
+                    throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
             }
 
             // Start the state machine
@@ -166,7 +220,11 @@ namespace libVT100
                 switch (phase)
                 {
                     case InternalState.Command:
-                        var cmd = m_commandBuffer[cursor++];
+                        byte cmd = 0;
+                        if (skipFirst == 0)
+                            cmd = m_commandBuffer[cursor++];
+                        else cmd = skipFirst;
+
                         switch (cmd)
                         {
                             case COMMAND_CSI:  // $[ CSI
@@ -272,6 +330,11 @@ namespace libVT100
                                 {
                                     inEsc = true;
                                     break;
+                                }
+                                if (cmd == C1_ST)  // Just fake it if high ST
+                                {
+                                    inEsc = true;
+                                    cmd = (int)'\\';
                                 }
                                 if (inEsc && cmd == '\\')
                                 {
@@ -420,7 +483,7 @@ namespace libVT100
                 bool returnToNormalState = true;
                 for (int i = cursor + 1; i < m_commandBuffer.Count; i++)
                 {
-                    if (m_commandBuffer[i] == ESC)
+                    if (isCMD(m_commandBuffer[i]))
                     {
                         m_commandBuffer.RemoveRange(0, i);
                         ProcessCommandBuffer();
@@ -441,10 +504,31 @@ namespace libVT100
 
         }
 
+        private bool isCMD(byte c)
+        {
+            switch (c)
+            {
+                case ESC:
+                    return true;
+
+                case C1_CSI:
+                case C1_OSC:
+                case C1_DCS:
+                    return true;
+
+                case C1_IND:
+                case C1_NEL:
+                case C1_HTS:
+                case C1_RI:
+                    return true;
+            }
+            return false;
+        }
+
         protected void ProcessNormalInput(byte _data)
         {
             //System.Console.WriteLine ( "ProcessNormalInput: {0:X2}", _data );
-            if (_data == ESC)
+            if (isCMD(_data ))
             {
                 throw new Exception("Internal error, ProcessNormalInput was passed an escape character, please report this bug to the author.");
             }
@@ -513,7 +597,7 @@ namespace libVT100
             switch (m_state)
             {
                 case State.Normal:
-                    if (_data[0] == ESC)
+                    if (isCMD(_data[0]))
                     {
                         AddToCommandBuffer(_data);
                         ProcessCommandBuffer();
@@ -521,7 +605,7 @@ namespace libVT100
                     else
                     {
                         int i = 0;
-                        while (i < _data.Length && _data[i] != ESC)
+                        while (i < _data.Length && !isCMD(_data[i]))
                         {
                             ProcessNormalInput(_data[i]);
                             i++;
@@ -540,6 +624,7 @@ namespace libVT100
 
                 case State.CommandCSI:
                 case State.CommandOSC:
+                case State.CommandDCS:
                     AddToCommandBuffer(_data);
                     ProcessCommandBuffer();
                     break;
@@ -571,6 +656,7 @@ namespace libVT100
         abstract protected void ProcessCommandTwo(string terminator);
         abstract protected void ProcessCommandThree(string parameters, string terminator);
         abstract protected void ProcessCommandDCS(string parameters);
+      
 
         virtual public event DecoderOutputDelegate Output;
         virtual protected void OnOutput(byte[] _output)

@@ -140,6 +140,8 @@ namespace libVT100
 
     public interface IAnsiDecoderClient : IDisposable
     {
+        void SetTab(IAnsiDecoder _sender);
+        void ClearTab(IAnsiDecoder _sender, bool ClearAll);
         void Characters(IAnsiDecoder _sender, char[] _chars);
         void SaveCursor(IAnsiDecoder _sernder);
         void RestoreCursor(IAnsiDecoder _sender);
