@@ -42,7 +42,7 @@
             this.connectButton = new System.Windows.Forms.Button();
             this.disconnectButton = new System.Windows.Forms.Button();
             this.statusLabel = new System.Windows.Forms.Label();
-            this.terminalFrameBuffer = new VRTermDev.TerminalCanvas();
+            //this.terminalFrameBuffer = new VRTermDev.TerminalCanvas();
             this.terminalLegend = new System.Windows.Forms.Label();
             this.flowLayoutPanel1.SuspendLayout();
             this.tableLayoutPanel1.SuspendLayout();
@@ -211,13 +211,13 @@
             // terminalFrameBuffer
             // 
             this.terminalFrameBuffer.BackColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.terminalFrameBuffer.BoundScreen = null;
+            //this.terminalFrameBuffer.BoundScreen = null;
             this.terminalFrameBuffer.Location = new System.Drawing.Point(3, 109);
             this.terminalFrameBuffer.Name = "terminalFrameBuffer";
             this.terminalFrameBuffer.Size = new System.Drawing.Size(981, 200);
             this.terminalFrameBuffer.TabIndex = 6;
             this.terminalFrameBuffer.TabStop = false;
-            this.terminalFrameBuffer.TerminalFont = null;
+            //this.terminalFrameBuffer.TerminalFont = null;
             this.terminalFrameBuffer.PreviewKeyDown += new System.Windows.Forms.PreviewKeyDownEventHandler(this.terminalFrameBuffer_PreviewKeyDown);
             // 
             // terminalLegend

@@ -9,10 +9,9 @@ namespace VRTermDev
 {
     public partial class TerminalCanvas : Control, ISupportInitialize
     {
-        public Font TerminalFont { get; set; }
-        public TerminalFrameBuffer BoundScreen { get; set; }
-        public Label LegendLabel { get; internal set; }
-
+        private Font TerminalFont;
+        private TerminalFrameBuffer BoundScreen;
+        private Label LegendLabel;
         public event Action<int, int> OnTerminalSizeChanged;
 
         int charWidth;
@@ -27,8 +26,10 @@ namespace VRTermDev
         private Timer cursorTimer;
         private bool cursorOn = false;
 
-        public TerminalCanvas()
+        public TerminalCanvas(Font screenFont)
         {
+            TerminalFont = screenFont;
+
             InitializeComponent();
 
             // SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -48,7 +49,11 @@ namespace VRTermDev
             cursorTimer.Tick += CursorTimer_Tick;
             cursorTimer.Start();
         }
-
+        internal void BindScreen(TerminalFrameBuffer screen, Label terminalLegend)
+        {
+            BoundScreen = screen;
+            LegendLabel = terminalLegend;
+        }
         private void CursorTimer_Tick(object sender, EventArgs e)
         {
             cursorOn = !cursorOn;
@@ -84,7 +89,7 @@ namespace VRTermDev
             if (!initCalled)
             {
                 // Only do this once - Init can be called multiple times if needed
-                BoundScreen.OnUIAction += BoundScreen_OnUIAction;
+                TerminalFrameBuffer.OnUIAction += BoundScreen_OnUIAction;
             }
 
             buildBuffer();
@@ -130,6 +135,7 @@ namespace VRTermDev
         protected override void OnSizeChanged(EventArgs e)
         {
             if (DesignMode) return;
+            if (BoundScreen is null) return;
 
             buildBuffer();
 
@@ -137,10 +143,10 @@ namespace VRTermDev
         }
 
         // Hopefully this lets us trap the tab
-        protected override bool IsInputKey(Keys keyData)
-        {
-            return true; // base.IsInputKey(keyData);
-        }
+        //protected override bool IsInputKey(libVT100.Keys keyData)
+        //{
+         //   return true; // base.IsInputKey(keyData);
+        //}
 
         private void buildBuffer()
         {
@@ -373,6 +379,8 @@ namespace VRTermDev
         {
 
         }
+
+
         #endregion
     }
 }

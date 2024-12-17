@@ -413,21 +413,21 @@ namespace libVT100.Tests
             return m_size;
         }
         
-        void IAnsiDecoderClient.MoveCursor ( IAnsiDecoder _sender, Direction _direction, int _amount )
-        {
-            m_moveCursorDirection = _direction;
-            m_moveCursorAmount = _amount;
-        }
+        //void IAnsiDecoderClient.MoveCursor ( IAnsiDecoder _sender, Direction _direction, int _amount )
+        //{
+        //    m_moveCursorDirection = _direction;
+        //    m_moveCursorAmount = _amount;
+        //}
         
-        void IAnsiDecoderClient.MoveCursorToBeginningOfLineBelow ( IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine )
-        {
-            m_moveCursorToBeginningOfLineBelow = _lineNumberRelativeToCurrentLine;
-        }
+        //void IAnsiDecoderClient.MoveCursorToBeginningOfLineBelow ( IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine )
+        //{
+        //    m_moveCursorToBeginningOfLineBelow = _lineNumberRelativeToCurrentLine;
+        //}
         
-        void IAnsiDecoderClient.MoveCursorToBeginningOfLineAbove ( IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine )
-        {
-            m_moveCursorToBeginningOfLineAbove = _lineNumberRelativeToCurrentLine;
-        }
+        //void IAnsiDecoderClient.MoveCursorToBeginningOfLineAbove ( IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine )
+        //{
+        //    m_moveCursorToBeginningOfLineAbove = _lineNumberRelativeToCurrentLine;
+        //}
         
         void IAnsiDecoderClient.MoveCursorToColumn ( IAnsiDecoder _sender, int _columnNumber )
         {
@@ -488,6 +488,36 @@ namespace libVT100.Tests
         }
 
         public void SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.SetTab(IAnsiDecoder _sender)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.ClearTab(IAnsiDecoder _sender, bool ClearAll)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.MoveCursor(IAnsiDecoder _sender, Direction _direction, int _amount, bool scroll)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.MoveCursorToBeginningOfLineBelow(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.MoveCursorToBeginningOfLineAbove(IAnsiDecoder _sender, int _lineNumberRelativeToCurrentLine, bool scroll)
+        {
+            throw new NotImplementedException();
+        }
+
+        void IAnsiDecoderClient.ClearNext(AnsiDecoder ansiDecoder, int numChars)
         {
             throw new NotImplementedException();
         }

@@ -2,7 +2,6 @@ using System;
 using System.Text;
 using System.Drawing;
 using System.Collections.Generic;
-using System.Windows.Forms;
 using System.Diagnostics;
 
 namespace libVT100
@@ -10,6 +9,8 @@ namespace libVT100
     public class AnsiDecoder : EscapeCharacterDecoder, IAnsiDecoder
     {
         protected List<IAnsiDecoderClient> m_listeners;
+
+        public StringBuilder? dvt { get; set; }
 
         Encoding IDecoder.Encoding
         {
@@ -31,7 +32,16 @@ namespace libVT100
         public AnsiDecoder()
            : base()
         {
-            m_listeners = new List<IAnsiDecoderClient>();
+            m_listeners = [];
+        }
+
+        public void deb(string s)
+        {
+            if (dvt is not null) dvt.Append(s);
+        }
+        public void deb(char c)
+        {
+            if (dvt is not null) dvt.Append(c);
         }
 
         private int DecodeInt(String _value, int _default)
@@ -55,34 +65,44 @@ namespace libVT100
         protected override void ProcessCommandCSI(byte _command, String _parameter)
         {
             //System.Console.WriteLine ( "ProcessCommand: {0} {1}", (char) _command, _parameter );
+            deb($"<CSI:{(char)_command},{_parameter}>");
+
             switch ((char)_command)
             {
                 case 'A':  // CSI Ps A  Cursor Up Ps Times (default = 1) (CUU).
+                    deb("[CUU]");
                     OnMoveCursor(Direction.Up, DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'B':  // CSI Ps B  Cursor Down Ps Times (default = 1) (CUD).
+                    deb("[CUD]");
                     OnMoveCursor(Direction.Down, DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'C':  // CSI Ps C Cursor Forward Ps Times(default = 1)(CUF).
+                    deb("[CUF]");
                     OnMoveCursor(Direction.Forward, DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'D':  // CSI Ps D  Cursor Backward Ps Times (default = 1) (CUB).
+                    deb("[CUB]");
                     OnMoveCursor(Direction.Backward, DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'E':  // CSI Ps E  Cursor Next Line Ps Times (default = 1) (CNL).
+                    deb("[CNL]");
                     OnMoveCursorToBeginningOfLineBelow(DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'F':  // CSI Ps F  Cursor Preceding Line Ps Times (default = 1) (CPL).
+                    deb("[CPL]");
                     OnMoveCursorToBeginningOfLineAbove(DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'G': // CSI Ps G  Cursor Character Absolute  [column] (default = [row,1]) (CHA).
-                    OnMoveCursorToColumn(DecodeInt(_parameter, 1) - 1);
+                case 'G': // CSI Ps G  Cursor Character Absolute  [column] (default = [row,1]) (CHA).                 
+                    var dec = DecodeInt(_parameter, 1) - 1;
+                    deb($"[CHA:{dec}]");
+                    OnMoveCursorToColumn(dec);
                     break;
 
                 case 'H':  //CSI Ps ; Ps H -  Cursor Position[row; column] (default = [1, 1])(CUP).
@@ -91,18 +111,23 @@ namespace libVT100
                         int separator = _parameter.IndexOf(';');
                         if (separator == -1)
                         {
+                            deb($"[CUP:0,0]");
                             OnMoveCursorTo(new Point(0, 0));
                         }
                         else
                         {
                             String row = _parameter.Substring(0, separator);
                             String column = _parameter.Substring(separator + 1, _parameter.Length - separator - 1);
-                            OnMoveCursorTo(new Point(DecodeInt(column, 1) - 1, DecodeInt(row, 1) - 1));
+                            var cl = DecodeInt(column, 1) - 1;
+                            var rl = DecodeInt(row, 1) - 1;
+                            deb($"[CUP:{cl},{rl}]");
+                            OnMoveCursorTo(new Point(cl, rl));
                         }
                     }
                     break;
 
                 case 'I':   // CSI Ps I  Cursor Forward Tabulation Ps tab stops (default = 1) (CHT).
+                    deb("[cht]");
                     break;
 
                 case 'J':
@@ -111,6 +136,7 @@ namespace libVT100
                     //       Ps = 1->Erase Above.
                     //       Ps = 2->Erase All.
                     //       Ps = 3->Erase Saved Lines(xterm).
+                    deb($"[ED:{_parameter}]");
                     OnClearScreen((ClearDirection)DecodeInt(_parameter, 0));
                     break;
 
@@ -119,18 +145,28 @@ namespace libVT100
                     //          Ps = 0->Erase to Right(default).
                     //          Ps = 1->Erase to Left.
                     //          Ps = 2->Erase All.
+                    deb($"[EL:{_parameter}]");
                     OnClearLine((ClearDirection)DecodeInt(_parameter, 0));
                     break;
 
                 case 'M':  // CSI Ps M  Delete Ps Line(s) (default = 1) (DL).
+                    deb("[dl]");
                     break;
 
                 case 'S':  // CSI Ps S  Scroll up Ps lines (default = 1) (SU), VT420, ECMA-48.
+                    deb("[SU]");
                     OnScrollPageUpwards(DecodeInt(_parameter, 1));
                     break;
 
                 case 'T':  // CSI Ps T  Scroll down Ps lines (default = 1) (SD), VT420.
+                    deb("[SD]");
                     OnScrollPageDownwards(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'X':  // CSI ps X  Erase Ps characters [ECH]  (is this an xterm? - we get this, but vt100 spec doesn't have this -- this might fix major bug)
+                    // As I read on, this is a vt420/vt510 extension
+                    deb("[ECH]");
+                    OnClearNext(DecodeInt(_parameter, 0));                
                     break;
 
                 case 'c':   // CSI Ps c  Send Device Attributes (Primary DA).
@@ -142,6 +178,7 @@ namespace libVT100
                     break;
 
                 case 'g':  // CSI Ps g  Tab Clear (TBC).
+                    deb("[TBC]");
                     switch (_parameter)
                     {
                         case "":
@@ -161,6 +198,7 @@ namespace libVT100
 
                 case 'm':  // CSI Pm m  Character Attributes (SGR).
                     {
+                        deb("[SGR]");
                         String[] commands = _parameter.Split(';');
                         GraphicRendition[] renditionCommands = new GraphicRendition[commands.Length];
                         for (int i = 0; i < commands.Length; ++i)
@@ -180,18 +218,22 @@ namespace libVT100
                     // CSI Ps ; Ps r Set Scrolling Region [top;bottom] (default = full size of window) (DECSTBM), VT100.
                     // CSI ? Pm r  Restore DEC Private Mode Values.The value of Ps previously saved is restored.Ps values are the same as for DECSET.
                     // CSI Pt; Pl; Pb ; Pr; Ps $ r   Change Attributes in Rectangular Area(DECCARA), VT400 and up.   Pt; Pl; Pb; Pr denotes the rectangle. Ps denotes the SGR attributes to change: 0, 1, 4, 5, 7.
+                    deb("[CPL]");
                     break;
 
                 case 's':   // CSI s     Save cursor, available only when DECLRMM is disabled (SCOSC, also ANSI.SYS).
+                    deb("[SCOSC]");
                     OnSaveCursor();
                     break;
 
                 case 't':  // Window manipulation EWMH
+                    deb("[EWMH]");
                     DoCSI_WindowManipulation(_parameter);
                     break;
 
 
                 case 'u':   // CSI u     Restore cursor (SCORC, also ANSI.SYS).
+                    deb("[SCORC]");
                     OnRestoreCursor();
                     break;
 
@@ -208,13 +250,28 @@ namespace libVT100
                     // Set alternate keypad mode (rto: non-numeric, presumably)
                     break;
 
-                    // Unknowns
+                // Currently unimplemented vt510/vt420 sequences - https://vt100.net/docs/vt510-rm/chapter4.html
+                // We may ultimately want to get these to be fully xterm compatible - some of them are a bit wierd - hard to know if curses would produce them, though we can check termcap
+
+                case '~':   // Vt420/vt510 extension - delete column
+                    deb("DECDC-unimplemented");
+                    break;
+                case '@':   // Vt420/vt510 extension - insert character
+                    deb("ICH-unimplemented");
+                    break;
+                case '\'':   // Vt420/vt510 extension - insert column
+                    deb("DECIC-unimplemented");
+                    break;
+
+
+                // Unknowns
                 case '(':
                 case 'j':
                 case '\\':
                 case ']':
 
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented CSI: Command=" + _command + " Param=" + _parameter);
                     break;
             }
@@ -223,6 +280,8 @@ namespace libVT100
         private void DoCSI_WindowManipulation(string parameter)
         {
             // These are all explicit commands with fixed parameters
+            deb($"<WIN:{parameter}>");
+
             switch (parameter)
             {
                 case "18":  // Report size of text area in characters
@@ -259,6 +318,7 @@ namespace libVT100
                 case "23;1": // Resore icon title from stack
                 case "23;2": // Restore window title from stack
                 case "24":   // >=24 is resize DECSLPP
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented Window Manipulation: " + parameter);
                     return;
             }
@@ -273,12 +333,15 @@ namespace libVT100
                     return;
             }
 
+            deb("[BAD!]");
             Debug.WriteLine("Unimplemented (and unknown) Window Manipulation: " + parameter);
             return;
         }
 
         private void DoCSI_DSR(string _parameter)
         {
+            deb($"<DSR:{_parameter}>");
+
             switch (_parameter)
             {
                 case "5":  //   Ps = 5  -> Status Report.
@@ -321,6 +384,7 @@ namespace libVT100
                 case "?75": // Ps = 7 5  -> Report data integrity as CSI ? 7 0 n  (ready, no errors).
                 case "?85": // Ps = 8 5  -> Report multi-session configuration as CSI ? 8 3 n (not configured for multiple - session operation).
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented CSI Command=DSR, Param=" + _parameter);
                     break;
             }
@@ -328,8 +392,17 @@ namespace libVT100
 
         private void DoCSI_DECRST(byte _command, string _parameter)
         {
+            deb($"<DECRST:{_command},{_parameter}>");
+
             switch (_parameter)
             {
+                case "4":
+                    // CSI 4 l restores the DEC Private Mode 4, which is specifically related to application cursor keys.
+                    break;
+                case "17":
+                case "?17":
+                    OnClearScreen(ClearDirection.Both);
+                    break;
                 case "20":  //  Ps = 2 0  -> Normal Linefeed (LNM).
                     OnModeChanged(AnsiMode.LineFeed);
                     break;
@@ -390,6 +463,7 @@ namespace libVT100
                     break;
 
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented CSI: Command=DECRST, Param=" + _parameter);
                     break;
                    
@@ -398,6 +472,8 @@ namespace libVT100
 
         private void DoCSI_DECSET(byte _command, string _parameter)
         {
+            deb($"<DECSET:{_command},{_parameter}>");
+
             switch (_parameter)
             {
                 case "":
@@ -476,6 +552,7 @@ namespace libVT100
                 case "?12;25":  //   Ps = 1 2  -> Start Blinking Cursor (AT&T 610).
                 
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented CSI: Command=DECSET, Param=" + _parameter);
                     break;
             }
@@ -483,6 +560,8 @@ namespace libVT100
 
         private void DoCSI_PrimaryDA(string _parameter)
         {
+            deb($"<P_DA:{_parameter}>");
+
             switch (_parameter)
             {
                 case "0":   //    Ps = 0  or omitted -> request attributes from terminal.  The response depends on the decTerminalID resource setting.
@@ -537,7 +616,10 @@ namespace libVT100
 
         protected override void ProcessCommandOSC(string parameters, string terminator)
         {
+            deb($"<OSC:{parameters},{terminator}>");
+
             var parts = parameters.Split(new char[] { ';' }, 2);
+
             switch (parts[0])
             {
                 case "0":
@@ -563,31 +645,45 @@ namespace libVT100
 
         protected override void ProcessCommandTwo(string terminator)
         {
+            deb($"<C2:{terminator}>");
             switch (terminator)
             {
                 case "D":  // IND (Index down - with scroll)
+                    deb("[IND]");
                     OnMoveCursor(Direction.Down, 1, true);
                     return;
                 case "M":  // RI (Reverse Index up - with scroll)
+                    deb("[RI]");
                     OnMoveCursor(Direction.Up, 1, true);
                     return;
                 case "E":  // NEL (Next Line - with scroll)
+                    deb("[NEL]");
                     OnMoveCursorToBeginningOfLineBelow(1, true);
                     return;
                 case "H":  // Tab Set(HTS  is 0x88). - need to handle the 8 bit version of this
+                    deb("[HTS]");
                     SetTab();
                     break;
                 case "=":  // ESC =     Application Keypad (DECKPAM).
+                    deb("[DECKPAM]");
                     OnModeChanged(AnsiMode.ApplicationKeypad_DECKPAM);
                     break;
                 case ">":  // ESC >     Normal Keypad (DECKPNM), VT100.
+                    deb("[DECKPNM]");
                     OnModeChanged(AnsiMode.NormalKeypad_DECKPNM);
                     break;
                 case "c": // ESC c     Full Reset (RIS), VT100.
+                    deb("[RIS]");
                     OnClearScreen(ClearDirection.Both);
                     break;
 
+                case "7":
+                    // Save cursor position
+                case "8":
+                    // Restore cursor position
+
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented TwoLetter: Term=" + terminator);
                     break;
             }
@@ -595,6 +691,8 @@ namespace libVT100
 
         protected override void ProcessCommandThree(string parameters, string terminator)
         {
+            deb($"<C3:{parameters},{terminator}>");
+
             switch (parameters)
             {
                 case "(":  // Set G0 Character Set (there are lots)
@@ -610,17 +708,37 @@ namespace libVT100
                             OnModeChanged(AnsiMode.SwitchG0toVT100_LineDrawing);
                             return;
                         default:
+                            deb("[BAD!]");
                             Debug.WriteLine("Unimplemented G0 Character set: " + terminator);
                             return;
                     }
 
             }
 
+            switch (parameters)
+            {
+                case ")":  // Set G0 Character Set (there are lots)
+                    switch (terminator)
+                    {
+                        case "0":
+                            OnModeChanged(AnsiMode.SwitchG0toVT100_US);
+                            return;
+                        default:
+                            deb("[BAD!]");
+                            Debug.WriteLine("Unimplemented G0 Character set: " + terminator);
+                            return;
+                    }
+
+            }
+
+            deb("[BAD!]");
             Debug.WriteLine("Unimplemented ThreeLetter: Param=" + parameters + " Term=" + terminator);
         }
 
         protected override void ProcessCommandDCS(string parameters)
         {
+            deb($"<DCS:{parameters}>");
+
             switch (parameters)
             {
                 // DECRQSS
@@ -643,6 +761,7 @@ namespace libVT100
                 case "$q$|":    // DECSCPP
                 case "$q*|":    // DECSNLS
                 default:
+                    deb("[BAD!]");
                     Debug.WriteLine("Unimplemented DCS: Param=" + parameters);
                     return;
             }
@@ -669,6 +788,7 @@ namespace libVT100
                 client.ScrollPageUpwards(this, _linesToScroll);
             }
         }
+       
 
         protected virtual void OnScrollPageDownwards(int _linesToScroll)
         {
@@ -680,6 +800,21 @@ namespace libVT100
 
         protected virtual void OnModeChanged(AnsiMode _mode)
         {
+            switch (_mode)
+            {
+                case AnsiMode.SwitchG0toVT100_LineDrawing:
+                    deb("[F:LD]");
+                    break;
+                case AnsiMode.SwitchG0toVT100_US:
+                    deb("[F:US]");
+                    break;
+                case AnsiMode.SwitchG0toVT100_UK:
+                    deb("[F:UK]");
+                    break;
+                default:
+                    deb($"[Mode:{_mode}]");
+                    break;
+            }
             foreach (IAnsiDecoderClient client in m_listeners)
             {
                 client.ModeChanged(this, _mode);
@@ -724,6 +859,13 @@ namespace libVT100
             }
         }
 
+        protected virtual void OnClearNext(int numChars)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.ClearNext(this, numChars);
+            }
+        }
         protected virtual void OnClearLine(ClearDirection _direction)
         {
             foreach (IAnsiDecoderClient client in m_listeners)

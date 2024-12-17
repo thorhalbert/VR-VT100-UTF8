@@ -159,5 +159,6 @@ namespace libVT100
         void SetGraphicRendition(IAnsiDecoder _sender, GraphicRendition[] _commands);
         void ModeChanged(IAnsiDecoder _sender, AnsiMode _mode);
         void SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value);
+        void ClearNext(AnsiDecoder ansiDecoder, int numChars);
     }
 }

@@ -1,12 +1,16 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using static libVT100.TerminalFrameBuffer.GraphicAttributes;
+using System.Data.Common;
+using System.Runtime.CompilerServices;
 
 namespace libVT100
 {
-    public class TerminalFrameBuffer : IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Glyph>
+    public class TerminalFrameBuffer : IAnsiDecoderClient, IEnumerable<TerminalFrameBuffer.Glyph>, IDisposable
     {
         #region Define Enums
 
@@ -71,18 +75,18 @@ namespace libVT100
 
         // Manage Alternate Buffer
         protected bool screenBufferIsPrimary = true;
-        protected Glyph[,] currentScreenBuffer;
+        protected Glyph[,]? currentScreenBuffer;
         protected Point savePrimaryCursor;
-        protected Glyph[,] primaryScreenBuffer;
-        protected Glyph[,] alternateScreenBuffer;
+        protected Glyph[,]? primaryScreenBuffer;
+        protected Glyph[,]? alternateScreenBuffer;
         protected Point saveAlternativeCursor;
 
         protected GraphicAttributes m_currentAttributes;
 
         #endregion
         #region Saved Scrolling Buffer Management
-        protected List<Glyph[]> UpperBuffer = new List<Glyph[]>();
-        protected List<Glyph[]> LowerBuffer = new List<Glyph[]>();
+        protected List<Glyph[]> UpperBuffer = [];
+        protected List<Glyph[]> LowerBuffer = [];
 
         // Always will succeed even if we push stuff of top of lists
         private void pushOntoBuffer(Glyph[] line, bool lower)
@@ -144,9 +148,10 @@ namespace libVT100
 
         #endregion
         #region UI Actions Messages
-        public event Action<List<UIActions>> OnUIAction;
-        private static List<UIActions> UIActionQueue = new List<UIActions>();
-        private static object _actionLock = new object();   // We're likely multithreaded here from the inputs coming in from sshshell
+        public static event Action<List<UIActions>>? OnUIAction;
+        private static List<UIActions> UIActionQueue = [];
+        private static object _actionLock = new();   // We're likely multithreaded here from the inputs coming in from sshshell
+        private bool disposedValue;
 
         public abstract class UIActions
         {
@@ -158,7 +163,7 @@ namespace libVT100
                 CursorMoved,
                 SetProperty,
             }
-
+            
             public ActionTypes Action { get; }
 
             public UIActions(ActionTypes _type)
@@ -167,7 +172,23 @@ namespace libVT100
                 lock (_actionLock)
                 {
                     UIActionQueue.Add(this);
+
+
                 }
+            }
+
+            public void Fire()
+            {
+                // For now, let's not do the FlushAction, just do it
+                List<UIActions> queue = null;
+                lock (_actionLock)
+                {
+                    queue = UIActionQueue;
+                    UIActionQueue = [];
+                }
+
+                OnUIAction?.Invoke(queue);
+                queue.Clear();
             }
         }
 
@@ -219,6 +240,53 @@ namespace libVT100
             return this[x, y];
         }
 
+        public Glyph[] GetGlyphRow(int x, int y, int length)
+        {
+            try
+            {
+                if (currentScreenBuffer is null) return Array.Empty<Glyph>();
+
+                var len = length;
+                if (length < 1 || len > Width - x)
+                    length = Width - x;
+
+                var ret = new Glyph[length];
+
+                for (var i = 0; i < length; i++)
+                    ret[i] = this.currentScreenBuffer[x + i, y];
+
+                return ret;
+            }
+            catch { }
+
+            return [];
+        }
+
+        public string GetGlyphString(int x, int y, int length)
+        {
+            try
+            {
+                if (currentScreenBuffer is null) return "";
+                var sb = new StringBuilder();
+
+                var len = length;
+                if (length < 1 || len > Width - x)
+                    length = Width - x;
+
+                for (var i = 0; i < length; i++)
+                {
+                    var c = currentScreenBuffer[x + i, y];
+                    if (c is not null)
+                        sb.Append(c.Char);
+                }
+
+                return sb.ToString();
+            }
+            catch { }
+
+            return "";
+        }
+
         public class UIAction_CursorMoved : UIActions
         {
             public UIAction_CursorMoved(int column, int row, bool showCursor) : base(ActionTypes.CursorMoved)
@@ -237,12 +305,13 @@ namespace libVT100
         {
             if (UIActionQueue.Count < 1) return;
 
-            List<UIActions> queue = null;
+            List<UIActions>? queue = null;
             lock (_actionLock)
             {
                 queue = UIActionQueue;
-                UIActionQueue = new List<UIActions>();
+                UIActionQueue = [];
             }
+
             OnUIAction?.Invoke(queue);
             queue.Clear();
         }
@@ -251,6 +320,10 @@ namespace libVT100
         #region GraphicsAttributes
         public struct GraphicAttributes
         {
+            public GraphicAttributes()
+            {
+            }
+
             public GraphicAttributeElements Elements { get; private set; }
 
             public bool Bold
@@ -376,6 +449,14 @@ namespace libVT100
                 }
             }
 
+            public enum CHARSETs
+            {
+                G0,
+                G1
+            }
+
+            public CHARSETs CHARSET { get; set; } = CHARSETs.G0;
+
             // We eventually have to get rid of the system.drawing elements and move them to the consumer (UI stuff)
 
             public Color TextColorToColor(TextColor _textColor)
@@ -439,6 +520,8 @@ namespace libVT100
 
                 Foreground = TextColor.White;
                 Background = TextColor.Black;
+
+                CHARSET = CHARSETs.G0;
             }
         }
         #endregion
@@ -449,10 +532,30 @@ namespace libVT100
             private char m_char;
             private GraphicAttributes m_graphicAttributes;
 
+            public static readonly char[] G1Chars = 
+                [ '♦', '▒', '→', 'ƒ',
+                'r', '↴', '°', '±',
+                '↴', '↓', '┘', '┐',
+                '┌', '└', '┼', '⎺',
+                '⎻', '─', '⎼', '⎽',
+                '├', '┤', '┴', '┬',
+                '│', '≤', '≥', 'π',
+                '≠', '£', '·', ' '];  // These are unicode - there appears to be some variation in the first few chars
+
             public char Char
             {
                 get
                 {
+                    switch (m_graphicAttributes.CHARSET)
+                    {
+                        case CHARSETs.G0:
+                            return m_char;
+                        case CHARSETs.G1:
+                            var idx = m_char - '`';
+                            if (idx >= 0 && idx < G1Chars.Length)
+                                return G1Chars[idx];       // Return line drawing chars for now
+                            return m_char;
+                    }
                     return m_char;
                 }
                 set
@@ -460,6 +563,9 @@ namespace libVT100
                     m_char = value;
                 }
             }
+
+            // In case we need to see the underlying character (without G0/G1 mapping)
+            public char RawChar {  get { return m_char;  } }
 
             public GraphicAttributes Attributes
             {
@@ -558,11 +664,11 @@ namespace libVT100
             {
                 if (m_cursorPosition != value)
                 {
-                    CheckColumnRow(value.X, value.Y);
+                    if (!CheckColumnRow(value.X, value.Y)) return;
 
                     m_cursorPosition = value;
 
-                    new UIAction_CursorMoved(value.X, value.Y, m_showCursor);
+                    new UIAction_CursorMoved(value.X, value.Y, m_showCursor).Fire();
                 }
             }
         }
@@ -571,19 +677,18 @@ namespace libVT100
         {
             get
             {
-                CheckColumnRow(_column, _row);
+              
 
                 return currentScreenBuffer[_column, _row];
             }
             set
             {
-                CheckColumnRow(_column, _row);
+                if (!CheckColumnRow(_column, _row)) return;
 
                 currentScreenBuffer[_column, _row] = value;
 
-                new UIAction_UpdateScreen(_column, _row, value);
+                new UIAction_UpdateScreen(_column, _row, value).Fire();
 
-                new UIAction_UpdateScreen(_column, _row, value);
             }
         }
 
@@ -634,7 +739,7 @@ namespace libVT100
             m_savedCursorPosition = Point.Empty;
             m_currentAttributes.Reset();
 
-            new UIAction_ClearScreen();
+            new UIAction_ClearScreen().Fire();
         }
 
         public void DoRefresh(bool sendWhite)
@@ -648,14 +753,14 @@ namespace libVT100
                 {
                     var c = this[x, y];
                     if (sendWhite)
-                        new UIAction_UpdateScreen(x, y, c);
+                        new UIAction_UpdateScreen(x, y, c).Fire();
                     else
                     {
                         var white = (c.Char == ' ');
                         if (c.Attributes.Background != TextColor.Black)
                             white = false;
                         if (!white)
-                            new UIAction_UpdateScreen(x, y, c);
+                            new UIAction_UpdateScreen(x, y, c).Fire();
                     }
                 }
             }
@@ -685,16 +790,20 @@ namespace libVT100
         #endregion
         #region Basic Cursor Movement and Scrolling
 
-        protected void CheckColumnRow(int _column, int _row)
+        protected bool CheckColumnRow(int _column, int _row)
         {
             if (_column >= Width)
             {
-                throw new ArgumentOutOfRangeException(String.Format("The column number ({0}) is larger than the screen width ({1})", _column, Width));
+                Console.WriteLine($"The column number ({_column}) is larger than the screen width ({Width})");
+                return false;
             }
             if (_row >= Height)
             {
-                throw new ArgumentOutOfRangeException(String.Format("The row number ({0}) is larger than the screen height ({1})", _row, Height));
+                Console.WriteLine($"The row number ({_row}) is larger than the screen height ({Height})");
+                return false;
             }
+
+            return true;
         }
 
         public void CursorForward()
@@ -747,7 +856,7 @@ namespace libVT100
             for (var col = 0; col < Width; col++)
                 currentScreenBuffer[col, Height - 1] = new Glyph();
 
-            new UIAction_ScrollScreenUp(keepScroll);
+            new UIAction_ScrollScreenUp(keepScroll).Fire();
         }
 
         public void CursorDown(bool scroll)
@@ -798,26 +907,38 @@ namespace libVT100
         }
         #endregion
         #region Implement IAnsiDecoderClient
+
+      
+
         void IAnsiDecoderClient.Characters(IAnsiDecoder _sender, char[] _chars)
         {
             foreach (char ch in _chars)
             {
                 if (ch >= 32)
                 {
+                    _sender.deb(ch);
 
-                    this[CursorPosition] = new Glyph(ch, m_currentAttributes); ;
+                    this[CursorPosition] = new Glyph(ch, m_currentAttributes); 
                     CursorForward();
                     return;
                 }
+
+                _sender.deb($"[0x{(int)ch:x}]");
+
                 switch (ch)
                 {
-                    case '\n':      // Linefeed, FF, VT
+                    //case '\x0b':  // VT
+                    //case '\x0c':  // FF
+                    case '\n':      // Linefeed
+                        _sender.deb($"[LF]");
                         (this as IAnsiDecoderClient).MoveCursorToBeginningOfLineBelow(_sender, 1, true);
                         return;
                     case '\r':      // Return
                         (this as IAnsiDecoderClient).MoveCursorToColumn(_sender, 0);
+                       _sender.deb($"[RET]\n");
                         return;
                     case '\x08':    // Backspace
+                        _sender.deb($"[BS]");
                         CursorBackward();
                         return;
                     case '\t':      // Tab
@@ -830,11 +951,17 @@ namespace libVT100
                         }
                         return;
                     case '\x07':    // BEL
+                        _sender.deb($"[BEL]");
                         return;
-                        // SI
-                        // SO
+                    case '\x0e':     // SI
+                        _sender.deb($"[SI]");
+                        m_currentAttributes.CHARSET = CHARSETs.G0;
+                        break;
+                    case '\x0f':     // SO
+                        _sender.deb($"[SO]");
+                        m_currentAttributes.CHARSET = CHARSETs.G1;
+                        break;
                         // ENQ
-                        // BEL
                 }
 
             }
@@ -915,14 +1042,14 @@ namespace libVT100
 
         void IAnsiDecoderClient.MoveCursorToColumn(IAnsiDecoder _sender, int _columnNumber)
         {
-            CheckColumnRow(_columnNumber, m_cursorPosition.Y);
+            if (!CheckColumnRow(_columnNumber, m_cursorPosition.Y)) return;
 
             CursorPosition = new Point(_columnNumber, m_cursorPosition.Y);
         }
 
         void IAnsiDecoderClient.MoveCursorTo(IAnsiDecoder _sender, Point _position)
         {
-            CheckColumnRow(_position.X, _position.Y);
+            if (!CheckColumnRow(_position.X, _position.Y)) return;
 
             CursorPosition = _position;
         }
@@ -959,13 +1086,31 @@ namespace libVT100
             }
         }
 
+        /// <summary>
+        /// This is a wierd one - this is ECH in xterm.   Vt100 spec doesn't seem to use this, but maybe it's
+        /// later.  This is a major bug not implementing this.
+        /// </summary>
+        /// <param name="ansiDecoder"></param>
+        /// <param name="numChars"></param>
+        void IAnsiDecoderClient.ClearNext(AnsiDecoder ansiDecoder, int numChars)
+        {
+            for (int x = 0; x < numChars; ++x)
+            {
+                var sx = x + m_cursorPosition.X;
+                if (sx < Width)
+                    this[sx, m_cursorPosition.Y] = new Glyph(' ', this[sx, m_cursorPosition.Y].Attributes);  // Not sure we should keep attributes
+            }
+        }
+
         void IAnsiDecoderClient.ScrollPageUpwards(IAnsiDecoder _sender, int _linesToScroll)
         {
+            _sender.deb($"[ScrollUp:{_linesToScroll}]");
             ScrollScreen(_linesToScroll);
         }
 
         void IAnsiDecoderClient.ScrollPageDownwards(IAnsiDecoder _sender, int _linesToScroll)
         {
+            _sender.deb($"[ScrollDn:{_linesToScroll}]");
             ScrollScreen(-_linesToScroll);
         }
 
@@ -974,14 +1119,22 @@ namespace libVT100
             Size cur;
             switch (_mode)
             {
+                // This isn't implemented right yet - These modes actually define with G0 and G1 are, not which we're using
+                case AnsiMode.SwitchG0toVT100_US:
+                    m_currentAttributes.CHARSET = CHARSETs.G0;
+                    break;
+                case AnsiMode.SwitchG0toVT100_LineDrawing:
+                    m_currentAttributes.CHARSET = CHARSETs.G1;
+                    break;
+
                 case AnsiMode.HideCursor:
                     m_showCursor = false;
-                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
+                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor).Fire();
                     break;
 
                 case AnsiMode.ShowCursor:
                     m_showCursor = true;
-                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor);
+                    new UIAction_CursorMoved(m_cursorPosition.X, m_cursorPosition.Y, m_showCursor).Fire();
                     break;
                 case AnsiMode.SwitchToMainBuffer:
                     if (screenBufferIsPrimary) return;
@@ -1017,7 +1170,7 @@ namespace libVT100
 
         void IAnsiDecoderClient.SetProperty(IAnsiDecoder _sender, PropertyTypes type, string value)
         {
-            new UIAction_SetProperty(type, value);
+            new UIAction_SetProperty(type, value).Fire();
         }
 
         void IAnsiDecoderClient.SetGraphicRendition(IAnsiDecoder _sender, GraphicRendition[] _commands)
@@ -1199,12 +1352,37 @@ namespace libVT100
             }
         }
         #endregion
-        #region Misc
-        void IDisposable.Dispose()
+
+        protected virtual void Dispose(bool disposing)
         {
-            currentScreenBuffer = null;
+            if (!disposedValue)
+            {
+                if (disposing)
+                {
+                    OnUIAction = null;  // Clear events -- these leak easily
+                    currentScreenBuffer = null;
+                    primaryScreenBuffer = null;
+                    alternateScreenBuffer = null;
+                }
+
+                // TODO: free unmanaged resources (unmanaged objects) and override finalizer
+                // TODO: set large fields to null
+                disposedValue = true;
+            }
         }
 
-        #endregion
+        // // TODO: override finalizer only if 'Dispose(bool disposing)' has code to free unmanaged resources
+        // ~TerminalFrameBuffer()
+        // {
+        //     // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+        //     Dispose(disposing: false);
+        // }
+
+        public void Dispose()
+        {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
     }
 }

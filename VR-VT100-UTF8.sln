@@ -1,16 +1,16 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.28010.2046
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "libvt100", "src\libvt100.csproj", "{1207872C-AD4D-4EEE-B222-B55904B6D488}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "libvt100", "src\libvt100.csproj", "{1207872C-AD4D-4EEE-B222-B55904B6D488}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UnitTest", "tests\UnitTest.csproj", "{0B7E0C27-FF5D-4FDF-9E3C-3ABC882324FE}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UnitTest", "tests\UnitTest.csproj", "{0B7E0C27-FF5D-4FDF-9E3C-3ABC882324FE}"
 	ProjectSection(ProjectDependencies) = postProject
 		{1207872C-AD4D-4EEE-B222-B55904B6D488} = {1207872C-AD4D-4EEE-B222-B55904B6D488}
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VRTermDev", "VRTermDev\VRTermDev.csproj", "{A3EC5F56-E773-4BE8-986E-6DDFA07FF89A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VRTermDev", "VRTermDev\VRTermDev.csproj", "{A3EC5F56-E773-4BE8-986E-6DDFA07FF89A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

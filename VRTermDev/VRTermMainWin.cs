@@ -28,9 +28,8 @@ namespace VRTermDev
 
         public VRTermMain()
         {
-            InitializeComponent();
-
-            screenInfo.Text = statusLabel.Text = terminalLegend.Text = "";
+         
+            //screenInfo.Text = statusLabel.Text = terminalLegend.Text = "";
 
             //SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
@@ -38,8 +37,13 @@ namespace VRTermDev
 
             VRTermMain_SizeChanged(this, new EventArgs());  // After this, we'll have a bitmap
 
+            terminalFrameBuffer = new TerminalCanvas(screenFont);
+
             terminalFrameBuffer.OnTerminalSizeChanged += TerminalFrameBuffer_OnTerminalSizeChanged;
-            terminalFrameBuffer.TerminalFont = screenFont;
+            //terminalFrameBuffer.TerminalFont = screenFont;
+
+            InitializeComponent();
+
 
             checkLoginState();
         }
@@ -79,6 +83,8 @@ namespace VRTermDev
         // With flow layout's its hard to get the picturebox to autosize - some hackery here
         private void VRTermMain_SizeChanged(object sender, EventArgs e)
         {
+            if (terminalFrameBuffer is null) return;
+
             var left = terminalFrameBuffer.Left;
             var top = terminalFrameBuffer.Top;
 
@@ -142,8 +148,9 @@ namespace VRTermDev
             var tSize = terminalFrameBuffer.EstimateScreenSize();
             screen = new libVT100.TerminalFrameBuffer(tSize.X, tSize.Y);
 
-            terminalFrameBuffer.BoundScreen = screen;
-            terminalFrameBuffer.LegendLabel = terminalLegend;
+            //terminalFrameBuffer.BoundScreen = screen;
+            //terminalFrameBuffer.LegendLabel = terminalLegend;
+            terminalFrameBuffer.BindScreen(screen, terminalLegend);
 
             terminalFrameBuffer.Init();
 
@@ -176,7 +183,7 @@ namespace VRTermDev
             var termModes = new Dictionary<Renci.SshNet.Common.TerminalModes, uint>();
            
             var shell = client.CreateShell(keyboardStream, screenS, screenS,
-                "VRTerm",(uint) tSize.X, (uint) tSize.Y, (uint) terminalFrameBuffer.Width, (uint) terminalFrameBuffer.Height, termModes);
+                "vt100",(uint) tSize.X, (uint) tSize.Y, (uint) terminalFrameBuffer.Width, (uint) terminalFrameBuffer.Height, termModes);
                
               
              
@@ -223,7 +230,9 @@ namespace VRTermDev
 
         private void pass_textbox_KeyUp(object sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Enter)
+  
+
+            if ((int) e.KeyCode == (int) libVT100.Keys.Enter)
             {
                 e.Handled = true;
                 connectButton.PerformClick();

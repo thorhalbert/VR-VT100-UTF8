@@ -1,7 +1,6 @@
 using System;
 using System.Text;
 using System.Collections.Generic;
-using System.Windows.Forms;
 using System.Diagnostics;
 
 namespace libVT100
@@ -479,6 +478,26 @@ namespace libVT100
             }
             System.Console.WriteLine ( "" );
             */
+
+            //var SI = 0; var SO = 0;
+            //var sb = new StringBuilder();
+            //foreach (var b in _data)
+            //{
+            //    if (b < 32) 
+            //        sb.Append($"<{b}>");
+            //    else
+            //        sb.Append(Convert.ToChar(b));
+            //    switch (b)
+            //    {
+            //        case 14:
+            //            SO++;
+            //            break;
+            //        case 15:
+            //            SI++;
+            //            break;
+            //    }
+            //}
+            //var rawDump = sb.ToString();
 
             if (_data.Length == 0)
             {
