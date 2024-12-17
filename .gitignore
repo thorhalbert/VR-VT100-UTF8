@@ -13,3 +13,12 @@
 /vt100render/obj/Debug
 /.vs/VR-VT100-UTF8/v15
 /packages/NUnit.3.11.0
+/.vs/VR-VT100-UTF8/DesignTimeBuild
+/.vs/VR-VT100-UTF8/FileContentIndex
+/.vs/VR-VT100-UTF8/v17/.suo
+/.vs/VR-VT100-UTF8/v17/.futdcache.v2
+/.vs/VR-VT100-UTF8/v17/.wsuo
+/src/bin/Debug/net9.0
+/src/obj
+/tests/obj
+/VRTermDev/obj
