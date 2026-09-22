@@ -5,39 +5,69 @@ using System.Diagnostics;
 
 namespace libVT100
 {
+    /// <summary>
+    /// Base stream decoder that consumes raw bytes and parses C0/C1 control characters and escape sequences.
+    /// Handles fragmentation across packet boundaries without data loss.
+    /// </summary>
     public abstract class EscapeCharacterDecoder : IDecoder
     {
+        /// <summary>ASCII Escape character (0x1B).</summary>
         public const byte ESC = 0x1B;
+        /// <summary>ASCII Left Bracket '[' (0x5B), CSI introducer character.</summary>
         public const byte LBRACK = 0x5B;
+        /// <summary>ASCII Right Bracket ']' (0x5D), OSC introducer character.</summary>
         public const byte RBRACK = 0x5D;
+        /// <summary>ASCII Backslash '\' (0x5C), ST string terminator character.</summary>
         public const byte BACKSLASH = 0x5C;
 
+        /// <summary>XON software flow control character (DC1, 17).</summary>
         public const byte XonCharacter = 17;
+        /// <summary>XOFF software flow control character (DC3, 19).</summary>
         public const byte XoffCharacter = 19;
 
+        /// <summary>7-bit CSI introducer character '['.</summary>
         public const byte COMMAND_CSI = LBRACK;
+        /// <summary>7-bit String Terminator '\'.</summary>
         public const byte COMMAND_ST = BACKSLASH;
+        /// <summary>Single Shift 2 'N'.</summary>
         public const byte COMMAND_SS2 = (int)'N';
+        /// <summary>Single Shift 3 'O'.</summary>
         public const byte COMMAND_SS3 = (int)'O';
+        /// <summary>Device Control String introducer 'P'.</summary>
         public const byte COMMAND_DCS = (int)'P';
+        /// <summary>Operating System Command introducer ']'.</summary>
         public const byte COMMAND_OSC = RBRACK;
+        /// <summary>Application Program Command introducer '_'.</summary>
         public const byte COMMAND_APC = (int)'_';
 
         // 8-bit versions of the commands
+        /// <summary>8-bit Single Shift 2 (0x8E).</summary>
         public const byte C1_SS2 = 0x8e;
+        /// <summary>8-bit Single Shift 3 (0x8F).</summary>
         public const byte C1_SS3 = 0x8f;
+        /// <summary>8-bit Device Control String (0x90).</summary>
         public const byte C1_DCS = 0x90;
+        /// <summary>8-bit Control Sequence Introducer (0x9B).</summary>
         public const byte C1_CSI = 0x9b;
+        /// <summary>8-bit String Terminator (0x9C).</summary>
         public const byte C1_ST = 0x9c;
+        /// <summary>8-bit Operating System Command (0x9D).</summary>
         public const byte C1_OSC = 0x9d;
+        /// <summary>8-bit Start of String (0x98).</summary>
         public const byte C1_SOS = 0x98;
+        /// <summary>8-bit Privacy Message (0x9E).</summary>
         public const byte C1_PM = 0x9e;
+        /// <summary>8-bit Application Program Command (0x9F).</summary>
         public const byte C1_APC = 0x9f;
 
         // 1 byte 8-bit commands
+        /// <summary>8-bit Index (0x84).</summary>
         public const byte C1_IND = 0x84;
+        /// <summary>8-bit Next Line (0x85).</summary>
         public const byte C1_NEL = 0x85;
+        /// <summary>8-bit Horizontal Tab Set (0x88).</summary>
         public const byte C1_HTS = 0x88;
+        /// <summary>8-bit Reverse Index (0x8D).</summary>
         public const byte C1_RI = 0x8d;
        
         protected enum State
@@ -47,16 +77,21 @@ namespace libVT100
             CommandTwo,
             CommandThree,
             CommandOSC,
-            CommandDCS
+            CommandDCS,
+            CommandAPC
         }
         protected State m_state;
-        protected Encoding m_encoding;
-        protected Decoder m_decoder;
-        protected Encoder m_encoder;
-        private List<byte> m_commandBuffer;
+        protected Encoding m_encoding = Encoding.ASCII;
+        protected Decoder m_decoder = Encoding.ASCII.GetDecoder();
+        protected Encoder m_encoder = Encoding.ASCII.GetEncoder();
+        private List<byte> m_commandBuffer = new List<byte>();
         protected bool m_supportXonXoff;
         protected bool m_xOffReceived;
-        protected List<byte[]> m_outBuffer;
+        protected List<byte[]> m_outBuffer = new List<byte[]>();
+
+        /// <summary>Maximum duration an incomplete escape sequence will wait for input before timing out and resuming normal parsing.</summary>
+        public TimeSpan SequenceTimeout { get; set; } = TimeSpan.FromSeconds(3.0);
+        private DateTime m_sequenceStartTime = DateTime.MinValue;
 
         Encoding IDecoder.Encoding
         {
@@ -78,7 +113,9 @@ namespace libVT100
         public EscapeCharacterDecoder()
         {
             m_state = State.Normal;
-            (this as IDecoder).Encoding = Encoding.ASCII;
+            m_encoding = Encoding.ASCII;
+            m_decoder = m_encoding.GetDecoder();
+            m_encoder = m_encoding.GetEncoder();
             m_commandBuffer = new List<byte>();
             m_supportXonXoff = false;
             m_xOffReceived = false;
@@ -152,9 +189,8 @@ namespace libVT100
             var terminator = string.Empty;
 
             int cursor = 0;
-            m_state = State.CommandCSI;  // We're guessing (it's one or the other)
-            const string interParts = " !\"#$%&'()*+,-./?";
-            const string paramParts = "0123456789;";
+            const string interParts = " !\"#$%&'()*+,-./";
+            const string paramParts = "0123456789;:?>=<";
             const string twoLetter = "DEHMNOPVWXZ\\&_6789=>Fclmno|}~";
             const string threeLetter = " #%()*+-./";
             bool inEsc = false;
@@ -163,7 +199,43 @@ namespace libVT100
 
             var count = m_commandBuffer.Count;
 
-            if (count < 2) return;  // Not enough data
+            if (count < 1) return;  // Not enough data
+            if (m_commandBuffer[0] == ESC && count < 2) return;
+
+            if (m_sequenceStartTime == DateTime.MinValue)
+            {
+                m_sequenceStartTime = DateTime.UtcNow;
+            }
+
+            if ((DateTime.UtcNow - m_sequenceStartTime) > SequenceTimeout)
+            {
+                Console.Error.WriteLine($"[libvt100:WARN] Escape sequence timed out after {SequenceTimeout.TotalSeconds:F1}s in state {m_state}. Resuming ground state.");
+                m_state = State.Normal;
+                m_sequenceStartTime = DateTime.MinValue;
+                m_commandBuffer.Clear();
+                return;
+            }
+
+            bool isLargeCommand = false;
+            if (m_commandBuffer[0] == ESC && count >= 2)
+            {
+                byte c2 = m_commandBuffer[1];
+                isLargeCommand = (c2 == COMMAND_APC || c2 == COMMAND_OSC || c2 == COMMAND_DCS);
+            }
+            else if (m_commandBuffer[0] == C1_APC || m_commandBuffer[0] == C1_OSC || m_commandBuffer[0] == C1_DCS)
+            {
+                isLargeCommand = true;
+            }
+
+            int maxLimit = isLargeCommand ? (16 * 1024 * 1024) : 4096;
+            if (count > maxLimit)
+            {
+                Console.Error.WriteLine($"[libvt100:WARN] Escape sequence buffer overflow ({count} bytes in state {m_state}). Resetting to ground state.");
+                m_state = State.Normal;
+                m_sequenceStartTime = DateTime.MinValue;
+                m_commandBuffer.Clear();
+                return;
+            }
 
             // Allow the full 8 bit commands too
             byte skipFirst = 0;
@@ -181,6 +253,9 @@ namespace libVT100
                     break;
                 case C1_DCS:
                     skipFirst = COMMAND_DCS;
+                    break;
+                case C1_APC:
+                    skipFirst = COMMAND_APC;
                     break;
 
                 // 1 byte commands
@@ -207,7 +282,11 @@ namespace libVT100
 
 
                 default:
-                    throw new Exception("Internal error, first command character _MUST_ be the escape character, please report this bug to the author.");
+                    Console.Error.WriteLine($"[libvt100:ERROR] First command character (0x{first:X2}) was not an escape introducer. Resetting parser.");
+                    m_state = State.Normal;
+                    m_sequenceStartTime = DateTime.MinValue;
+                    m_commandBuffer.Clear();
+                    return;
             }
 
             // Start the state machine
@@ -246,6 +325,13 @@ namespace libVT100
                                 phase = InternalState.Terminator;
                                 break;
 
+                            case COMMAND_APC: // $_ APC (Application Program Command)
+                                m_state = State.CommandAPC;
+                                term = Terminators.OSC_ST_BEL;
+                                intermediates = null;
+                                phase = InternalState.Terminator;
+                                break;
+
                             // The other two letter command types will get caught below
 
                             default:
@@ -269,10 +355,10 @@ namespace libVT100
                                     break;
                                 }
 
-                                // Something Unknown!  Unwind
-                                m_state = State.Normal;  // Don't try to execute this
+                                // Something Unknown! Discard invalid escape sequence and recover
+                                m_state = State.Normal;
                                 phase = InternalState.Complete;
-                                return;
+                                break;
 
 
                                 // Other escape types (+VT52 types)
@@ -289,6 +375,13 @@ namespace libVT100
 
                     case InternalState.Parameters:
                         cmd = m_commandBuffer[cursor];
+                        if (cmd == 0x18 || cmd == 0x1A) // CAN / SUB cancel
+                        {
+                            cursor++;
+                            m_state = State.Normal;
+                            phase = InternalState.Complete;
+                            break;
+                        }
                         if (interParts.IndexOf((char)cmd) >= 0)
                         {
                             intermediates += (char)cmd;
@@ -306,6 +399,12 @@ namespace libVT100
                         break;
                     case InternalState.Terminator:
                         cmd = m_commandBuffer[cursor++];
+                        if (cmd == 0x18 || cmd == 0x1A) // CAN / SUB cancel
+                        {
+                            m_state = State.Normal;
+                            phase = InternalState.Complete;
+                            break;
+                        }
                         switch (term)
                         {
                             case Terminators.Third:
@@ -352,6 +451,12 @@ namespace libVT100
                     break;
             }
 
+            if (phase != InternalState.Complete)
+            {
+                // Incomplete sequence - wait for more data to arrive
+                return;
+            }
+
             // Pass our command to the processor
             try
             {
@@ -372,48 +477,60 @@ namespace libVT100
                     case State.CommandDCS:
                         ProcessCommandDCS(parameters);
                         break;
+                    case State.CommandAPC:
+                        ProcessCommandAPC(parameters, terminator);
+                        break;
                 }
             }
             catch (Exception ex)
             {
+                Console.Error.WriteLine($"[libvt100:ERROR] Error processing command in state {m_state}: {ex.Message}");
                 Debug.WriteLine("Unsupported: " + ex.Message);
             }
 
-            cursor--;
+            int bytesConsumed = cursor;
+            m_commandBuffer.RemoveRange(0, bytesConsumed);
+            m_sequenceStartTime = DateTime.MinValue;
 
-            // IO State machine needs work
-
-            // Remove the processed commands
-            if (m_commandBuffer.Count == cursor - 1)
+            if (m_commandBuffer.Count == 0)
             {
-                // All command bytes processed, we can go back to normal handling
-                m_commandBuffer.Clear();
                 m_state = State.Normal;
             }
             else
             {
-                bool returnToNormalState = true;
-                for (int i = cursor + 1; i < m_commandBuffer.Count; i++)
+                int nextCmdIdx = -1;
+                for (int i = 0; i < m_commandBuffer.Count; i++)
                 {
                     if (isCMD(m_commandBuffer[i]))
                     {
-                        m_commandBuffer.RemoveRange(0, i);
-                        ProcessCommandBuffer();
-                        returnToNormalState = false;
+                        nextCmdIdx = i;
+                        break;
                     }
-                    else
+                }
+
+                if (nextCmdIdx == -1)
+                {
+                    for (int i = 0; i < m_commandBuffer.Count; i++)
                     {
                         ProcessNormalInput(m_commandBuffer[i]);
                     }
-                }
-                if (returnToNormalState)
-                {
                     m_commandBuffer.Clear();
-
                     m_state = State.Normal;
                 }
+                else if (nextCmdIdx == 0)
+                {
+                    ProcessCommandBuffer();
+                }
+                else
+                {
+                    for (int i = 0; i < nextCmdIdx; i++)
+                    {
+                        ProcessNormalInput(m_commandBuffer[i]);
+                    }
+                    m_commandBuffer.RemoveRange(0, nextCmdIdx);
+                    ProcessCommandBuffer();
+                }
             }
-
         }
 
         private bool isCMD(byte c)
@@ -426,6 +543,7 @@ namespace libVT100
                 case C1_CSI:
                 case C1_OSC:
                 case C1_DCS:
+                case C1_APC:
                     return true;
 
                 case C1_IND:
@@ -437,12 +555,23 @@ namespace libVT100
             return false;
         }
 
+        /// <summary>
+        /// Invoked when an Application Program Command (APC, ESC _ or 0x9F) sequence is decoded.
+        /// </summary>
+        /// <param name="parameters">The raw string payload contained within the APC envelope.</param>
+        /// <param name="terminator">The string terminator (ST, ESC \ or BEL).</param>
+        protected virtual void ProcessCommandAPC(string parameters, string terminator)
+        {
+        }
+
         protected void ProcessNormalInput(byte _data)
         {
-            //System.Console.WriteLine ( "ProcessNormalInput: {0:X2}", _data );
-            if (isCMD(_data ))
+            if (isCMD(_data))
             {
-                throw new Exception("Internal error, ProcessNormalInput was passed an escape character, please report this bug to the author.");
+                Console.Error.WriteLine($"[libvt100:WARN] ProcessNormalInput was passed an escape character (0x{_data:X2}). Redirecting to command buffer.");
+                AddToCommandBuffer(_data);
+                ProcessCommandBuffer();
+                return;
             }
             if (m_supportXonXoff)
             {
@@ -453,19 +582,22 @@ namespace libVT100
             }
 
             byte[] data = new byte[] { _data };
-            int charCount = m_decoder.GetCharCount(data, 0, 1);
-            char[] characters = new char[charCount];
-            m_decoder.GetChars(data, 0, 1, characters, 0);
+            char[] characters = new char[4];
+            int charCount = m_decoder.GetChars(data, 0, 1, characters, 0, false);
 
             if (charCount > 0)
             {
-                OnCharacters(characters);
+                if (charCount == 1)
+                {
+                    OnCharacters(new char[] { characters[0] });
+                }
+                else
+                {
+                    char[] result = new char[charCount];
+                    Array.Copy(characters, result, charCount);
+                    OnCharacters(result);
+                }
             }
-            else
-            {
-                //System.Console.WriteLine ( "char count was zero" );
-            }
-
         }
 
         void IDecoder.Input(byte[] _data)
@@ -499,9 +631,17 @@ namespace libVT100
             //}
             //var rawDump = sb.ToString();
 
-            if (_data.Length == 0)
+            if (_data == null || _data.Length == 0)
             {
-                throw new ArgumentException("Input can not process an empty array.");
+                return;
+            }
+
+            if (m_state != State.Normal && m_sequenceStartTime != DateTime.MinValue && (DateTime.UtcNow - m_sequenceStartTime) > SequenceTimeout)
+            {
+                Console.Error.WriteLine($"[libvt100:WARN] Escape sequence timed out after {SequenceTimeout.TotalSeconds:F1}s in state {m_state}. Resuming ground state.");
+                m_state = State.Normal;
+                m_sequenceStartTime = DateTime.MinValue;
+                m_commandBuffer.Clear();
             }
 
             if (m_supportXonXoff)
@@ -557,6 +697,7 @@ namespace libVT100
                 case State.CommandCSI:
                 case State.CommandOSC:
                 case State.CommandDCS:
+                case State.CommandAPC:
                     AddToCommandBuffer(_data);
                     ProcessCommandBuffer();
                     break;
@@ -576,21 +717,34 @@ namespace libVT100
 
         void IDisposable.Dispose()
         {
-            m_encoding = null;
-            m_decoder = null;
-            m_encoder = null;
-            m_commandBuffer = null;
+            m_commandBuffer?.Clear();
+            m_outBuffer?.Clear();
         }
 
+        /// <summary>Invoked when non-escape text characters have been decoded from the input stream.</summary>
         abstract protected void OnCharacters(char[] _characters);
-        abstract protected void ProcessCommandCSI(byte command, String _parameter);
-        abstract protected void ProcessCommandOSC(string parameters, string terminator);
-        abstract protected void ProcessCommandTwo(string terminator);
-        abstract protected void ProcessCommandThree(string parameters, string terminator);
-        abstract protected void ProcessCommandDCS(string parameters);
-      
 
-        virtual public event DecoderOutputDelegate Output;
+        /// <summary>Invoked when a complete Control Sequence Introducer (CSI) sequence has been decoded.</summary>
+        /// <param name="command">The terminating command byte.</param>
+        /// <param name="_parameter">Intermediate and numeric parameter string.</param>
+        abstract protected void ProcessCommandCSI(byte command, String _parameter);
+
+        /// <summary>Invoked when an Operating System Command (OSC) sequence has been decoded.</summary>
+        abstract protected void ProcessCommandOSC(string parameters, string terminator);
+
+        /// <summary>Invoked when a 2-character escape sequence (ESC + character) has been decoded.</summary>
+        abstract protected void ProcessCommandTwo(string terminator);
+
+        /// <summary>Invoked when a 3-character escape sequence (ESC + intermediate + final) has been decoded.</summary>
+        abstract protected void ProcessCommandThree(string parameters, string terminator);
+
+        /// <summary>Invoked when a Device Control String (DCS) sequence has been decoded.</summary>
+        abstract protected void ProcessCommandDCS(string parameters);
+
+        /// <summary>Event raised when output is emitted by the terminal emulator back to the host.</summary>
+        virtual public event DecoderOutputDelegate? Output;
+
+        /// <summary>Fires the <see cref="Output"/> event with raw bytes for host transmission.</summary>
         virtual protected void OnOutput(byte[] _output)
         {
             if (Output != null)

@@ -3,13 +3,33 @@ using System.Text;
 using System.Drawing;
 using System.Collections.Generic;
 using System.Diagnostics;
+using libVT100.Oob;
+using libVT100.KittyGraphics;
+
 
 namespace libVT100
 {
+    /// <summary>
+    /// Full VT100, VT220, ANSI, and xterm sequence decoder. Parses CSI, OSC, C2, and character sets,
+    /// evaluates 256/TrueColor SGR styles, and dispatches rendering commands to subscribed <see cref="IAnsiDecoderClient"/> instances.
+    /// </summary>
     public class AnsiDecoder : EscapeCharacterDecoder, IAnsiDecoder
     {
         protected List<IAnsiDecoderClient> m_listeners;
 
+        protected bool m_leftRightMarginMode = false;
+
+        private readonly OobChunkReassembler m_oobReassembler = new();
+        /// <summary>Gets the OOB chunk reassembly and defragmentation engine.</summary>
+        public OobChunkReassembler OobReassembler => m_oobReassembler;
+        /// <summary>Fires when an Out-of-Band (OOB) APC packet is fully received and reassembled.</summary>
+        public event EventHandler<OobPacketEventArgs>? OobPacketReceived;
+        private readonly List<IOobPacketHandler> m_globalOobHandlers = new();
+        private readonly KittyGraphicsReassembler m_kittyGfxReassembler = new();
+
+        private readonly Dictionary<string, List<IOobPacketHandler>> m_actionOobHandlers = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Gets or sets the string builder used for recording trace log tokens with standard DEC/ANSI jargon.</summary>
         public StringBuilder? dvt { get; set; }
 
         Encoding IDecoder.Encoding
@@ -29,16 +49,20 @@ namespace libVT100
             }
         }
 
+        /// <summary>Initializes a new instance of <see cref="AnsiDecoder"/>.</summary>
         public AnsiDecoder()
            : base()
         {
             m_listeners = [];
         }
 
+        /// <summary>Emits a formatted debug token to <see cref="dvt"/> if enabled.</summary>
         public void deb(string s)
         {
             if (dvt is not null) dvt.Append(s);
         }
+
+        /// <summary>Emits a character token to <see cref="dvt"/> if enabled.</summary>
         public void deb(char c)
         {
             if (dvt is not null) dvt.Append(c);
@@ -62,111 +86,160 @@ namespace libVT100
         }
 
         #region CSI Processor
+        /// <summary>
+        /// Processes Control Sequence Introducer (CSI) commands: ESC [ ... FinalChar.
+        /// Conforms to ECMA-48, DEC STD 070 (VT100/VT220), and X11 xterm Control Sequences.
+        /// </summary>
         protected override void ProcessCommandCSI(byte _command, String _parameter)
         {
-            //System.Console.WriteLine ( "ProcessCommand: {0} {1}", (char) _command, _parameter );
-            deb($"<CSI:{(char)_command},{_parameter}>");
-
             switch ((char)_command)
             {
-                case 'A':  // CSI Ps A  Cursor Up Ps Times (default = 1) (CUU).
-                    deb("[CUU]");
+                case '@':  // CSI Ps @  ICH - Insert Character(s) [default = 1] (ECMA-48 / VT420 / xterm)
+                    deb($"[ANSI:ICH({DecodeInt(_parameter, 1)})]");
+                    OnInsertCharacter(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'A':  // CSI Ps A  CUU - Cursor Up [default = 1] (ECMA-48 / ANSI X3.64)
+                    deb($"[ANSI:CUU({DecodeInt(_parameter, 1)})]");
                     OnMoveCursor(Direction.Up, DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'B':  // CSI Ps B  Cursor Down Ps Times (default = 1) (CUD).
-                    deb("[CUD]");
+                case 'B':  // CSI Ps B  CUD - Cursor Down [default = 1] (ECMA-48 / ANSI X3.64)
+                    deb($"[ANSI:CUD({DecodeInt(_parameter, 1)})]");
                     OnMoveCursor(Direction.Down, DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'C':  // CSI Ps C Cursor Forward Ps Times(default = 1)(CUF).
-                    deb("[CUF]");
+                case 'C':  // CSI Ps C  CUF - Cursor Forward [default = 1] (ECMA-48 / ANSI X3.64)
+                    deb($"[ANSI:CUF({DecodeInt(_parameter, 1)})]");
                     OnMoveCursor(Direction.Forward, DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'D':  // CSI Ps D  Cursor Backward Ps Times (default = 1) (CUB).
-                    deb("[CUB]");
+                case 'D':  // CSI Ps D  CUB - Cursor Backward [default = 1] (ECMA-48 / ANSI X3.64)
+                    deb($"[ANSI:CUB({DecodeInt(_parameter, 1)})]");
                     OnMoveCursor(Direction.Backward, DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'E':  // CSI Ps E  Cursor Next Line Ps Times (default = 1) (CNL).
-                    deb("[CNL]");
+                case 'E':  // CSI Ps E  CNL - Cursor Next Line [default = 1] (ECMA-48)
+                    deb($"[ANSI:CNL({DecodeInt(_parameter, 1)})]");
                     OnMoveCursorToBeginningOfLineBelow(DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'F':  // CSI Ps F  Cursor Preceding Line Ps Times (default = 1) (CPL).
-                    deb("[CPL]");
+                case 'F':  // CSI Ps F  CPL - Cursor Preceding Line [default = 1] (ECMA-48)
+                    deb($"[ANSI:CPL({DecodeInt(_parameter, 1)})]");
                     OnMoveCursorToBeginningOfLineAbove(DecodeInt(_parameter, 1), false);
                     break;
 
-                case 'G': // CSI Ps G  Cursor Character Absolute  [column] (default = [row,1]) (CHA).                 
-                    var dec = DecodeInt(_parameter, 1) - 1;
-                    deb($"[CHA:{dec}]");
-                    OnMoveCursorToColumn(dec);
+                case 'G': // CSI Ps G  CHA - Cursor Character Absolute [default = 1] (ECMA-48 / xterm)
+                case '`': // CSI Ps `  HPA - Horizontal Position Absolute [default = 1] (ECMA-48)
+                    {
+                        var col = DecodeInt(_parameter, 1) - 1;
+                        deb($"[ANSI:CHA({col})]");
+                        OnMoveCursorToColumn(col);
+                    }
                     break;
 
-                case 'H':  //CSI Ps ; Ps H -  Cursor Position[row; column] (default = [1, 1])(CUP).
-                case 'f':
+                case 'H':  // CSI Ps ; Ps H  CUP - Cursor Position [row; column] [default = 1; 1] (ECMA-48 / DEC)
+                case 'f':  // CSI Ps ; Ps f  HVP - Horizontal and Vertical Position (ECMA-48)
                     {
                         int separator = _parameter.IndexOf(';');
                         if (separator == -1)
                         {
-                            deb($"[CUP:0,0]");
+                            deb("[ANSI:CUP(0,0)]");
                             OnMoveCursorTo(new Point(0, 0));
                         }
                         else
                         {
-                            String row = _parameter.Substring(0, separator);
-                            String column = _parameter.Substring(separator + 1, _parameter.Length - separator - 1);
-                            var cl = DecodeInt(column, 1) - 1;
-                            var rl = DecodeInt(row, 1) - 1;
-                            deb($"[CUP:{cl},{rl}]");
+                            String rowStr = _parameter.Substring(0, separator);
+                            String columnStr = _parameter.Substring(separator + 1);
+                            var cl = DecodeInt(columnStr, 1) - 1;
+                            var rl = DecodeInt(rowStr, 1) - 1;
+                            deb($"[ANSI:CUP({rl},{cl})]");
                             OnMoveCursorTo(new Point(cl, rl));
                         }
                     }
                     break;
 
-                case 'I':   // CSI Ps I  Cursor Forward Tabulation Ps tab stops (default = 1) (CHT).
-                    deb("[cht]");
+                case 'I':   // CSI Ps I  CHT - Cursor Forward Tabulation [default = 1] (ECMA-48)
+                    deb($"[ANSI:CHT({DecodeInt(_parameter, 1)})]");
                     break;
 
-                case 'J':
-                    // CSI Ps J Erase in Display(ED), VT100.
-                    //       Ps = 0->Erase Below(default).
-                    //       Ps = 1->Erase Above.
-                    //       Ps = 2->Erase All.
-                    //       Ps = 3->Erase Saved Lines(xterm).
-                    deb($"[ED:{_parameter}]");
-                    OnClearScreen((ClearDirection)DecodeInt(_parameter, 0));
+                case 'J':   // CSI Ps J  ED - Erase in Display (ECMA-48 / xterm)
+                    {
+                        int edDir = DecodeInt(_parameter, 0);
+                        if (edDir == 3)
+                        {
+                            deb("[XTERM:ED_SCROLLBACK(3)]");
+                            OnClearSavedLines();
+                        }
+                        else
+                        {
+                            deb($"[ANSI:ED({(ClearDirection)edDir})]");
+                            OnClearScreen((ClearDirection)edDir);
+                        }
+                    }
                     break;
 
-                case 'K':
-                    // CSI Ps K Erase in Line(EL), VT100.
-                    //          Ps = 0->Erase to Right(default).
-                    //          Ps = 1->Erase to Left.
-                    //          Ps = 2->Erase All.
-                    deb($"[EL:{_parameter}]");
+                case 'K':   // CSI Ps K  EL - Erase in Line (ECMA-48)
+                    deb($"[ANSI:EL({(ClearDirection)DecodeInt(_parameter, 0)})]");
                     OnClearLine((ClearDirection)DecodeInt(_parameter, 0));
                     break;
 
-                case 'M':  // CSI Ps M  Delete Ps Line(s) (default = 1) (DL).
-                    deb("[dl]");
+                case 'L':  // CSI Ps L  IL - Insert Line(s) [default = 1] (ECMA-48 / VT102)
+                    deb($"[ANSI:IL({DecodeInt(_parameter, 1)})]");
+                    OnInsertLine(DecodeInt(_parameter, 1));
                     break;
 
-                case 'S':  // CSI Ps S  Scroll up Ps lines (default = 1) (SU), VT420, ECMA-48.
-                    deb("[SU]");
+                case 'M':  // CSI Ps M  DL - Delete Line(s) [default = 1] (ECMA-48 / VT102)
+                    deb($"[ANSI:DL({DecodeInt(_parameter, 1)})]");
+                    OnDeleteLine(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'P':  // CSI Ps P  DCH - Delete Character(s) [default = 1] (ECMA-48 / VT102)
+                    deb($"[ANSI:DCH({DecodeInt(_parameter, 1)})]");
+                    OnDeleteCharacter(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'S':  // CSI Ps S  SU - Scroll Up / Pan Down [default = 1] (ECMA-48 / VT420)
+                    deb($"[ANSI:SU({DecodeInt(_parameter, 1)})]");
                     OnScrollPageUpwards(DecodeInt(_parameter, 1));
                     break;
 
-                case 'T':  // CSI Ps T  Scroll down Ps lines (default = 1) (SD), VT420.
-                    deb("[SD]");
+                case 'T':  // CSI Ps T  SD - Scroll Down / Pan Up [default = 1] (ECMA-48 / VT420)
+                    deb($"[ANSI:SD({DecodeInt(_parameter, 1)})]");
                     OnScrollPageDownwards(DecodeInt(_parameter, 1));
                     break;
 
-                case 'X':  // CSI ps X  Erase Ps characters [ECH]  (is this an xterm? - we get this, but vt100 spec doesn't have this -- this might fix major bug)
-                    // As I read on, this is a vt420/vt510 extension
-                    deb("[ECH]");
-                    OnClearNext(DecodeInt(_parameter, 0));                
+                case 'X':  // CSI Ps X  ECH - Erase Character(s) [default = 1] (ECMA-48)
+                    deb($"[ANSI:ECH({DecodeInt(_parameter, 1)})]");
+                    OnClearNext(DecodeInt(_parameter, 1));                
+                    break;
+
+                case 'Z':  // CSI Ps Z  CBT - Cursor Backward Tabulation [default = 1] (ECMA-48 / xterm)
+                    deb($"[ANSI:CBT({DecodeInt(_parameter, 1)})]");
+                    OnMoveCursorBackTab(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'a':  // CSI Ps a  HPR - Horizontal Position Relative [default = 1] (ECMA-48)
+                    deb($"[ANSI:HPR({DecodeInt(_parameter, 1)})]");
+                    OnMoveCursor(Direction.Forward, DecodeInt(_parameter, 1), false);
+                    break;
+
+                case 'b':  // CSI Ps b  REP - Repeat Preceding Character [default = 1] (ECMA-48 / xterm)
+                    deb($"[ANSI:REP({DecodeInt(_parameter, 1)})]");
+                    OnRepeatCharacter(DecodeInt(_parameter, 1));
+                    break;
+
+                case 'd':  // CSI Ps d  VPA - Vertical Position Absolute [default = 1] (ECMA-48)
+                    {
+                        var row = DecodeInt(_parameter, 1) - 1;
+                        deb($"[ANSI:VPA({row})]");
+                        OnMoveCursorToRow(row);
+                    }
+                    break;
+
+                case 'e':  // CSI Ps e  VPR - Vertical Position Relative [default = 1] (ECMA-48)
+                    deb($"[ANSI:VPR({DecodeInt(_parameter, 1)})]");
+                    OnMoveCursor(Direction.Down, DecodeInt(_parameter, 1), false);
                     break;
 
                 case 'c':   // CSI Ps c  Send Device Attributes (Primary DA).
@@ -177,8 +250,8 @@ namespace libVT100
                     DoCSI_DECSET(_command, _parameter);
                     break;
 
-                case 'g':  // CSI Ps g  Tab Clear (TBC).
-                    deb("[TBC]");
+                case 'g':  // CSI Ps g  TBC - Tab Clear [0 = current, 3 = all] (ECMA-48)
+                    deb($"[ANSI:TBC({_parameter})]");
                     switch (_parameter)
                     {
                         case "":
@@ -191,151 +264,196 @@ namespace libVT100
                     }
                     break;
                     
-                case 'l':  // CSI ? Pm l - DEC Private Mode Reset(DECRST).
+                case 'l':  // CSI ? Pm l - Reset Mode (RM / DECRST)
                     DoCSI_DECRST(_command, _parameter);
                     break;
 
-
-                case 'm':  // CSI Pm m  Character Attributes (SGR).
-                    {
-                        deb("[SGR]");
-                        String[] commands = _parameter.Split(';');
-                        GraphicRendition[] renditionCommands = new GraphicRendition[commands.Length];
-                        for (int i = 0; i < commands.Length; ++i)
-                        {
-                            renditionCommands[i] = (GraphicRendition)DecodeInt(commands[i], 0);
-                            //System.Console.WriteLine ( "Rendition command: {0} = {1}", commands[i], renditionCommands[i]);
-                        }
-                        OnSetGraphicRendition(renditionCommands);
-                    }
+                case 'm':  // CSI Pm m  SGR - Select Graphic Rendition (ECMA-48 / xterm 256 / TrueColor)
+                    DoCSI_SGR(_parameter);
                     break;
 
-                case 'n':  // CSI Ps n  Device Status Report (DSR).
+                case 'n':  // CSI Ps n  DSR - Device Status Report (ECMA-48 / DEC)
                     DoCSI_DSR(_parameter);
                     break;
 
-                case 'r':
-                    // CSI Ps ; Ps r Set Scrolling Region [top;bottom] (default = full size of window) (DECSTBM), VT100.
-                    // CSI ? Pm r  Restore DEC Private Mode Values.The value of Ps previously saved is restored.Ps values are the same as for DECSET.
-                    // CSI Pt; Pl; Pb ; Pr; Ps $ r   Change Attributes in Rectangular Area(DECCARA), VT400 and up.   Pt; Pl; Pb; Pr denotes the rectangle. Ps denotes the SGR attributes to change: 0, 1, 4, 5, 7.
-                    deb("[CPL]");
+                case 'p':  // CSI ! p   DECSTR - Soft Terminal Reset (DEC VT220)
+                    if (_parameter == "!")
+                    {
+                        deb("[DEC:DECSTR]");
+                        OnReset(true);
+                    }
                     break;
 
-                case 's':   // CSI s     Save cursor, available only when DECLRMM is disabled (SCOSC, also ANSI.SYS).
-                    deb("[SCOSC]");
-                    OnSaveCursor();
+                case 'r':  // CSI Ps ; Ps r  DECSTBM - Set Top and Bottom Margins (DEC VT100)
+                    deb($"[DEC:DECSTBM({_parameter})]");
+                    {
+                        int sep = _parameter.IndexOf(';');
+                        int top = 1;
+                        int bottom = 0;
+                        if (sep == -1)
+                        {
+                            if (!string.IsNullOrEmpty(_parameter))
+                                top = DecodeInt(_parameter, 1);
+                        }
+                        else
+                        {
+                            top = DecodeInt(_parameter.Substring(0, sep), 1);
+                            bottom = DecodeInt(_parameter.Substring(sep + 1), 0);
+                        }
+                        OnSetScrollingRegion(top, bottom);
+                    }
                     break;
 
-                case 't':  // Window manipulation EWMH
-                    deb("[EWMH]");
+                case 's':  // CSI s / CSI Pl ; Pr s  (SCOSC or DECSLRM)
+                    if (m_leftRightMarginMode)
+                    {
+                        deb($"[DEC:DECSLRM({_parameter})]");
+                        int sep = _parameter.IndexOf(';');
+                        int left = 1;
+                        int right = 0;
+                        if (sep != -1)
+                        {
+                            left = DecodeInt(_parameter.Substring(0, sep), 1);
+                            right = DecodeInt(_parameter.Substring(sep + 1), 0);
+                        }
+                        else if (!string.IsNullOrEmpty(_parameter))
+                        {
+                            left = DecodeInt(_parameter, 1);
+                        }
+                        OnSetLeftRightMargins(left, right);
+                    }
+                    else
+                    {
+                        deb("[ANSI:SCOSC]");
+                        OnSaveCursor();
+                    }
+                    break;
+
+                case 't':  // Window manipulation (xterm / EWMH)
                     DoCSI_WindowManipulation(_parameter);
                     break;
 
-
-                case 'u':   // CSI u     Restore cursor (SCORC, also ANSI.SYS).
-                    deb("[SCORC]");
-                    OnRestoreCursor();
+                case 'q':  // CSI Ps SP q (DECSCUSR - Set Cursor Style)
+                    {
+                        int style = DecodeInt(_parameter.Trim(), 1);
+                        deb($"[KITTY:DECSCUSR({style})]");
+                        TerminalFrameBuffer.CursorShape shape;
+                        bool blinking = false;
+                        switch (style)
+                        {
+                            case 0:
+                            case 1:
+                                shape = TerminalFrameBuffer.CursorShape.Block;
+                                blinking = true;
+                                break;
+                            case 2:
+                                shape = TerminalFrameBuffer.CursorShape.Block;
+                                blinking = false;
+                                break;
+                            case 3:
+                                shape = TerminalFrameBuffer.CursorShape.Underline;
+                                blinking = true;
+                                break;
+                            case 4:
+                                shape = TerminalFrameBuffer.CursorShape.Underline;
+                                blinking = false;
+                                break;
+                            case 5:
+                                shape = TerminalFrameBuffer.CursorShape.Bar;
+                                blinking = true;
+                                break;
+                            case 6:
+                                shape = TerminalFrameBuffer.CursorShape.Bar;
+                                blinking = false;
+                                break;
+                            default:
+                                shape = TerminalFrameBuffer.CursorShape.Block;
+                                break;
+                        }
+                        OnSetCursorShape(shape, blinking);
+                    }
                     break;
 
+                case 'u':  // CSI u / CSI ? u / CSI > 1 u
+                    if (_parameter.StartsWith("?"))
+                    {
+                        deb("[KITTY:KEYBOARD_QUERY]");
+                        OnOutput(Encoding.ASCII.GetBytes("\x1B[?0u"));
+                    }
+                    else if (_parameter.StartsWith(">"))
+                    {
+                        deb($"[KITTY:KEYBOARD_PUSH({_parameter})]");
+                    }
+                    else if (_parameter.StartsWith("<"))
+                    {
+                        deb($"[KITTY:KEYBOARD_POP({_parameter})]");
+                    }
+                    else
+                    {
+                        deb("[ANSI:SCORC]");
+                        OnRestoreCursor();
+                    }
+                    break;
 
-
-
-                case '>':
-                    // Set numeric keypad mode
+                case '>':  // ESC >  DECKPNM - Normal Keypad (DEC VT100)
+                    deb("[DEC:DECKPNM]");
                     OnModeChanged(AnsiMode.NumericKeypad);
                     break;
 
-                case '=':
+                case '=':  // ESC =  DECKPAM - Application Keypad (DEC VT100)
+                    deb("[DEC:DECKPAM]");
                     OnModeChanged(AnsiMode.AlternateKeypad);
-                    // Set alternate keypad mode (rto: non-numeric, presumably)
                     break;
-
-                // Currently unimplemented vt510/vt420 sequences - https://vt100.net/docs/vt510-rm/chapter4.html
-                // We may ultimately want to get these to be fully xterm compatible - some of them are a bit wierd - hard to know if curses would produce them, though we can check termcap
-
-                case '~':   // Vt420/vt510 extension - delete column
-                    deb("DECDC-unimplemented");
-                    break;
-                case '@':   // Vt420/vt510 extension - insert character
-                    deb("ICH-unimplemented");
-                    break;
-                case '\'':   // Vt420/vt510 extension - insert column
-                    deb("DECIC-unimplemented");
-                    break;
-
-
-                // Unknowns
-                case '(':
-                case 'j':
-                case '\\':
-                case ']':
 
                 default:
-                    deb("[BAD!]");
-                    Debug.WriteLine("Unimplemented CSI: Command=" + _command + " Param=" + _parameter);
+                    deb($"[UNHANDLED:CSI:{(char)_command},{_parameter}]");
+                    Debug.WriteLine("Unimplemented CSI: Command=" + (char)_command + " Param=" + _parameter);
                     break;
             }
         }
 
         private void DoCSI_WindowManipulation(string parameter)
         {
-            // These are all explicit commands with fixed parameters
-            deb($"<WIN:{parameter}>");
+            deb($"[XTERM:WIN_MANIP({parameter})]");
 
             switch (parameter)
             {
-                case "18":  // Report size of text area in characters
-                    //var result18 = new byte[] { ESC, COMMAND_CSI, (int)'8', (int)'n' };
-                    //return;
-                case "19":  // Report the size of the screen in characters
-                    //var result19 = new byte[] { ESC, COMMAND_CSI, (int)'9', (int)'n' };
-                    //return;
+                case "18":  // Report size of text area in characters: CSI 8 ; height ; width t
+                    Size sz = OnGetSize();
+                    byte[] r18 = Encoding.ASCII.GetBytes($"\x1B[8;{sz.Height};{sz.Width}t");
+                    OnOutput(r18);
+                    deb($"[XTERM:WIN_REPORT_TEXTAREA({sz.Width}x{sz.Height})]");
+                    return;
 
-                case "1":   // Deiconify Window
-                case "2":   // Iconify window
-                case "5":   // Raise to front of stack
-                case "6":   // Lower to bottom of stack
-                case "7":   // Refresh the window
-                case "9;0": // Restore maximized window
-                case "9;1": // Maximize Window
-                case "9;2": // Maximize Window vertically
-                case "9;3": // Maximize Window horizontally
-                case "10;0": // Undo Full Screen Mode
-                case "10;1": // Change to full-screen
-                case "10;2": // Toggle-full Screen
-                case "11":  // Report xterm Window State
-                case "13":  // Report text area position
-                case "14":  // Report text area size in pixels
-                case "14;2": // Report size of window size in pixels
-                case "15":  // Report size of the screen in pixels
-                case "16":  // Report character size in pixels                           
-                case "20":  // Report window's icon label
-                case "21":  // Report Windows title
-                case "22;0": // Save xterm icon and window on stack
-                case "22;1": // Save xterm icon title on stack
-                case "22;2": // Save window title on stack
-                case "23;0": // Restore icon and window title from stack
-                case "23;1": // Resore icon title from stack
-                case "23;2": // Restore window title from stack
-                case "24":   // >=24 is resize DECSLPP
-                    deb("[BAD!]");
-                    Debug.WriteLine("Unimplemented Window Manipulation: " + parameter);
+                case "19":  // Report size of screen in characters: CSI 9 ; height ; width t
+                    Size sz19 = OnGetSize();
+                    byte[] r19 = Encoding.ASCII.GetBytes($"\x1B[9;{sz19.Height};{sz19.Width}t");
+                    OnOutput(r19);
+                    deb($"[XTERM:WIN_REPORT_SCREEN({sz19.Width}x{sz19.Height})]");
+                    return;
+
+                case "22;0;0":
+                case "22;1;0":
+                case "22;2;0":
+                case "22;0":
+                case "22;1":
+                case "22;2":
+                case "22":
+                    deb("[XTERM:TITLE_STACK_PUSH]");
+                    OnPushTitle();
+                    return;
+
+                case "23;0;0":
+                case "23;1;0":
+                case "23;2;0":
+                case "23;0":
+                case "23;1":
+                case "23;2":
+                case "23":
+                    deb("[XTERM:TITLE_STACK_POP]");
+                    OnPopTitle();
                     return;
             }
-            // While these have a fixed initial parameter and variable arguments in later parameters
-            var parms = parameter.Split(';');
-            switch (parms[0])
-            {
-                case "3":   // Move WIndow to x,y (parm1=X, parm2=Y)
-                case "4":   // Resize window (parm1=height, parm2=width)
-                case "8":   // Resize text area (parm1=height, parm2=width)
-                    Debug.WriteLine("Unimplemented Window Manipulation: " + parameter);
-                    return;
-            }
-
-            deb("[BAD!]");
-            Debug.WriteLine("Unimplemented (and unknown) Window Manipulation: " + parameter);
-            return;
         }
 
         private void DoCSI_DSR(string _parameter)
@@ -350,24 +468,9 @@ namespace libVT100
                     break;
                 case "6":  //   Ps = 6  -> Report Cursor Position (CPR) [row;column].
                     Point cursorPosition = OnGetCursorPosition();
-                    cursorPosition.X++;
-                    cursorPosition.Y++;
                     String row = cursorPosition.Y.ToString();
                     String column = cursorPosition.X.ToString();
-                    byte[] output = new byte[2 + row.Length + 1 + column.Length + 1];
-                    int i = 0;
-                    output[i++] = ESC;
-                    output[i++] = LBRACK;
-                    foreach (char c in row)
-                    {
-                        output[i++] = (byte)c;
-                    }
-                    output[i++] = (byte)';';
-                    foreach (char c in column)
-                    {
-                        output[i++] = (byte)c;
-                    }
-                    output[i++] = (byte)'R';
+                    byte[] output = Encoding.ASCII.GetBytes($"\x1B[{row};{column}R");
                     OnOutput(output);
                     break;
 
@@ -392,167 +495,292 @@ namespace libVT100
 
         private void DoCSI_DECRST(byte _command, string _parameter)
         {
-            deb($"<DECRST:{_command},{_parameter}>");
+            if (_parameter.Contains(';'))
+            {
+                bool isPriv = _parameter.StartsWith("?");
+                string[] parts = _parameter.Split(';');
+                foreach (string part in parts)
+                {
+                    string p = part;
+                    if (isPriv && !p.StartsWith("?"))
+                        p = "?" + p;
+                    DoCSI_DECRST_Single(_command, p);
+                }
+                return;
+            }
+            DoCSI_DECRST_Single(_command, _parameter);
+        }
+
+        private void DoCSI_DECRST_Single(byte _command, string _parameter)
+        {
+            deb($"[DEC:DECRST({_parameter})]");
 
             switch (_parameter)
             {
                 case "4":
-                    // CSI 4 l restores the DEC Private Mode 4, which is specifically related to application cursor keys.
+                    deb("[ANSI:IRM_RESET]");
+                    OnModeChanged(AnsiMode.ReplaceMode);
                     break;
                 case "17":
                 case "?17":
                     OnClearScreen(ClearDirection.Both);
                     break;
-                case "20":  //  Ps = 2 0  -> Normal Linefeed (LNM).
+                case "20":  // Normal Linefeed (LNM)
+                    deb("[ANSI:LNM_RESET]");
                     OnModeChanged(AnsiMode.LineFeed);
                     break;
 
-                case "?1":  // Ps = 1  -> Normal Cursor Keys (DECCKM), VT100.
+                case "?1":  // Normal Cursor Keys (DECCKM)
+                    deb("[DEC:DECCKM_RESET]");
                     OnModeChanged(AnsiMode.CursorKeyToCursor);
                     break;
 
-                case "?2":  // Ps = 2  -> Designate VT52 mode (DECANM), VT100.
+                case "?2":  // Designate VT52 mode (DECANM)
+                    deb("[DEC:DECANM_RESET]");
                     OnModeChanged(AnsiMode.VT52);
                     break;
 
-                case "?3":  // Ps = 3  -> 80 Column Mode (DECCOLM), VT100.
+                case "?3":  // 80 Column Mode (DECCOLM)
+                    deb("[DEC:DECCOLM_RESET]");
                     OnModeChanged(AnsiMode.Columns80);
                     break;
 
-                case "?4":  // Ps = 4  -> Jump (Fast) Scroll (DECSCLM), VT100.
+                case "?4":  // Jump (Fast) Scroll (DECSCLM)
+                    deb("[DEC:DECSCLM_RESET]");
                     OnModeChanged(AnsiMode.JumpScrolling);
                     break;
 
-                case "?5":  // Ps = 5  -> Normal Video (DECSCNM), VT100.
+                case "?5":  // Normal Video (DECSCNM)
+                    deb("[DEC:DECSCNM_RESET]");
                     OnModeChanged(AnsiMode.NormalVideo);
                     break;
 
-                case "?6":  // Ps = 6  -> Normal Cursor Mode (DECOM), VT100.
+                case "?6":  // Normal Cursor Mode (DECOM)
+                    deb("[DEC:DECOM_RESET]");
                     OnModeChanged(AnsiMode.OriginIsAbsolute);
                     break;
 
-                case "?7":  // Ps = 7  -> No Auto-wrap Mode (DECAWM), VT100.
+                case "?7":  // No Auto-wrap Mode (DECAWM)
+                    deb("[DEC:DECAWM_RESET]");
                     OnModeChanged(AnsiMode.DisableLineWrap);
                     break;
 
-                case "?8":  // Ps = 8  -> No Auto-repeat Keys (DECARM), VT100.
+                case "?8":  // No Auto-repeat Keys (DECARM)
+                    deb("[DEC:DECARM_RESET]");
                     OnModeChanged(AnsiMode.DisableAutoRepeat);
                     break;
 
-                case "?9":  // Ps = 9  -> Don't send Mouse X & Y on button press, xterm.
+                case "?9":  // Interlacing
+                    deb("[DEC:INTERLACING_RESET]");
                     OnModeChanged(AnsiMode.DisableInterlacing);
                     break;
 
-                case "?12":  //  Ps = 1 2  -> Stop Blinking Cursor (AT&T 610).
+                case "?12":  // Stop Blinking Cursor (AT&T 610)
+                    deb("[DEC:CURSOR_BLINK_RESET]");
                     break;
 
-                case "?25":  // Ps = 2 5  -> Hide Cursor (DECTCEM), VT220.
+                case "?25":  // Hide Cursor (DECTCEM)
+                    deb("[DEC:DECTCEM_RESET]");
                     OnModeChanged(AnsiMode.HideCursor);
                     break;
 
-                case "?40":  //  Ps = 4 0  -> Disallow 80 -> 132 Mode, xterm.
+                case "?40":  // Disallow 80 -> 132 Mode
+                    deb("[XTERM:132COLS_RESET]");
                     break;
 
-                case "?1049":
-                    // Ps = 1 0 4 9->Use Normal Screen Buffer and restore cursor
-                    // as in DECRC, xterm.This may be disabled by the titeInhibit
-                    // resource.This combines the effects of the 1 0 4 7  and 1 0 4
-                    // 8  modes.Use this with terminfo-based applications rather
-                    // than the 4 7  mode.
+                case "?69":  // Left and Right Margins (DECLRMM)
+                    deb("[DEC:DECLRMM_RESET]");
+                    m_leftRightMarginMode = false;
+                    OnModeChanged(AnsiMode.DisableLeftRightMarginMode);
+                    break;
+
+                case "?47":
+                case "?1047":
+                    deb($"[XTERM:ALTSCREEN_EXIT({_parameter})]");
                     OnModeChanged(AnsiMode.SwitchToMainBuffer);
                     break;
 
+                case "?1048":
+                    deb("[XTERM:CURSOR_RESTORE(1048)]");
+                    OnRestoreCursor();
+                    break;
+
+                case "?1049":
+                    deb("[XTERM:ALTSCREEN_EXIT(1049)]");
+                    OnModeChanged(AnsiMode.SwitchToMainBuffer);
+                    OnRestoreCursor();
+                    break;
+
+                case "?2026":  // Kitty Synchronized Output End
+                    deb("[KITTY:SYNC_OUTPUT_END]");
+                    OnModeChanged(AnsiMode.DisableSynchronizedOutput);
+                    break;
+
+                case "?1000":
+                case "?1001":
+                case "?1002":
+                case "?1003":
+                case "?1004":
+                case "?1005":
+                case "?1006":
+                    deb($"[XTERM:MOUSE_RESET({_parameter})]");
+                    break;
+
+                case "?1034":
+                    deb("[XTERM:META_OFF]");
+                    break;
+
+                case "?2004":
+                    deb("[XTERM:BRACKETED_PASTE_RESET]");
+                    break;
+
                 default:
-                    deb("[BAD!]");
+                    deb($"[UNHANDLED:DECRST:{_parameter}]");
                     Debug.WriteLine("Unimplemented CSI: Command=DECRST, Param=" + _parameter);
                     break;
-                   
             }
         }
 
         private void DoCSI_DECSET(byte _command, string _parameter)
         {
-            deb($"<DECSET:{_command},{_parameter}>");
+            if (_parameter.Contains(';'))
+            {
+                bool isPriv = _parameter.StartsWith("?");
+                string[] parts = _parameter.Split(';');
+                foreach (string part in parts)
+                {
+                    string p = part;
+                    if (isPriv && !p.StartsWith("?"))
+                        p = "?" + p;
+                    DoCSI_DECSET_Single(_command, p);
+                }
+                return;
+            }
+            DoCSI_DECSET_Single(_command, _parameter);
+        }
+
+        private void DoCSI_DECSET_Single(byte _command, string _parameter)
+        {
+            deb($"[DEC:DECSET({_parameter})]");
 
             switch (_parameter)
             {
                 case "":
-                    //Set ANSI (versus VT52)  DECANM
+                    deb("[DEC:DECANM_SET]");
                     OnModeChanged(AnsiMode.ANSI);
                     break;
 
+                case "4":
+                    deb("[ANSI:IRM_SET]");
+                    OnModeChanged(AnsiMode.InsertMode);
+                    break;
+
                 case "20":
-                    // Set new line mode
+                    deb("[ANSI:LNM_SET]");
                     OnModeChanged(AnsiMode.NewLine);
                     break;
 
                 case "?1":
-                    // Set cursor key to application  DECCKM
+                    deb("[DEC:DECCKM_SET]");
                     OnModeChanged(AnsiMode.CursorKeyToApplication);
                     break;
 
                 case "?3":
-                    // Set number of columns to 132  DECCOLM
+                    deb("[DEC:DECCOLM_SET]");
                     OnModeChanged(AnsiMode.Columns132);
                     break;
 
                 case "?4":
-                    // Set smooth scrolling  DECSCLM
+                    deb("[DEC:DECSCLM_SET]");
                     OnModeChanged(AnsiMode.SmoothScrolling);
                     break;
 
                 case "?5":
-                    // Set reverse video on screen  DECSCNM
+                    deb("[DEC:DECSCNM_SET]");
                     OnModeChanged(AnsiMode.ReverseVideo);
                     break;
 
                 case "?6":
-                    // Set origin to relative  DECOM
+                    deb("[DEC:DECOM_SET]");
                     OnModeChanged(AnsiMode.OriginIsRelative);
                     break;
 
                 case "?7":
-                    //  Set auto-wrap mode  DECAWM
-                    // Enable line wrap
+                    deb("[DEC:DECAWM_SET]");
                     OnModeChanged(AnsiMode.LineWrap);
                     break;
 
                 case "?8":
-                    // Set auto-repeat mode  DECARM
+                    deb("[DEC:DECARM_SET]");
                     OnModeChanged(AnsiMode.AutoRepeat);
                     break;
 
                 case "?9":
-                    /// Set interlacing mode 
+                    deb("[DEC:INTERLACING_SET]");
                     OnModeChanged(AnsiMode.Interlacing);
                     break;
 
+                case "?12":  // Start Blinking Cursor (AT&T 610)
+                    deb("[DEC:CURSOR_BLINK_SET]");
+                    break;
+
                 case "?25":
+                    deb("[DEC:DECTCEM_SET]");
                     OnModeChanged(AnsiMode.ShowCursor);
                     break;
 
-                case "?40":    // XTERM Allow 80/132 mode
+                case "?40":
+                    deb("[XTERM:132COLS_SET]");
                     break;
 
+                case "?69":
+                    deb("[DEC:DECLRMM_SET]");
+                    m_leftRightMarginMode = true;
+                    OnModeChanged(AnsiMode.LeftRightMarginMode);
+                    break;
+
+                case "?47":
                 case "?1047":
-                // Ps = 1 0 4 7->Use Normal Screen Buffer, xterm.Clear the
-                // screen first if in the Alternate Screen Buffer.  This may be
-                // disabled by the titeInhibit resource.
-                case "?1049":
-                    // Ps = 1 0 4 9->Save cursor as in DECSC, xterm.After sav-
-                    // ing the cursor, switch to the Alternate Screen Buffer, clear-
-                    // ing it first.  This may be disabled by the titeInhibit
-                    // resource.This control combines the effects of the 1 0 4 7
-                    // and 1 0 4 8  modes.Use this with terminfo-based applications
-                    // rather than the 4 7  mode.
+                    deb($"[XTERM:ALTSCREEN_ENTER({_parameter})]");
                     OnModeChanged(AnsiMode.SwitchToAlternateBuffer);
                     break;
 
-                // Need to implement
-                case "?12;25":  //   Ps = 1 2  -> Start Blinking Cursor (AT&T 610).
-                
+                case "?1048":
+                    deb("[XTERM:CURSOR_SAVE(1048)]");
+                    OnSaveCursor();
+                    break;
+
+                case "?1049":
+                    deb("[XTERM:ALTSCREEN_ENTER(1049)]");
+                    OnSaveCursor();
+                    OnModeChanged(AnsiMode.SwitchToAlternateBuffer);
+                    break;
+
+                case "?2026":  // Kitty Synchronized Output Start
+                    deb("[KITTY:SYNC_OUTPUT_START]");
+                    OnModeChanged(AnsiMode.SynchronizedOutput);
+                    break;
+
+                case "?1000":
+                case "?1001":
+                case "?1002":
+                case "?1003":
+                case "?1004":
+                case "?1005":
+                case "?1006":
+                    deb($"[XTERM:MOUSE_SET({_parameter})]");
+                    break;
+
+                case "?1034":
+                    deb("[XTERM:META_ON]");
+                    break;
+
+                case "?2004":
+                    deb("[XTERM:BRACKETED_PASTE_SET]");
+                    break;
+
                 default:
-                    deb("[BAD!]");
+                    deb($"[UNHANDLED:DECSET:{_parameter}]");
                     Debug.WriteLine("Unimplemented CSI: Command=DECSET, Param=" + _parameter);
                     break;
             }
@@ -560,55 +788,24 @@ namespace libVT100
 
         private void DoCSI_PrimaryDA(string _parameter)
         {
-            deb($"<P_DA:{_parameter}>");
+            if (_parameter == ">" || _parameter == ">0" || _parameter.StartsWith(">"))
+            {
+                deb("[DEC:DA2]");
+                var da2 = Encoding.ASCII.GetBytes("\x1B[>0;10;0c");
+                OnOutput(da2);
+                return;
+            }
 
+            deb($"[DEC:DA1({_parameter})]");
             switch (_parameter)
             {
-                case "0":   //    Ps = 0  or omitted -> request attributes from terminal.  The response depends on the decTerminalID resource setting.
-                            // cygterm generates "63;1;2;4;6;22c"
-                            // xfce generates "62;9;c"
-                            // xterm generates "64;1;2;6;15;18;21;22c"
-                    var da = new byte[] { ESC, LBRACK, (int)'?',
-                                (int)'6', (int)'4', (int)';',
-                                (int)'1', (int)';',
-                                (int)'2', (int)';',
-                                (int)'6', (int)';',
-                                (int)'1', (int)'5', (int)';',
-                                (int)'1', (int)'8', (int)';',
-                                (int)'2', (int)'1', (int)';',
-                                (int)'2', (int)'2', (int)';',
-                                (int)'c' };   // Send the xterm string for now 
+                case "":
+                case "0":
+                    var da = Encoding.ASCII.GetBytes("\x1B[?62;1;2;6;7;8;9c");
                     OnOutput(da);
                     break;
-                case "=0":  //      Ps = 0  -> report Terminal Unit ID (default), VT400.  XTerm uses zeros for the site code and serial number in its DECRPTUI response.
-                    break;
-                case ">0":
-                    // Send Device Attributes(Secondary DA).
-                    //   Ps = 0  or omitted -> request the terminal's identification
-                    //   code.The response depends on the decTerminalID resource set-
-                    //   ting.It should apply only to VT220 and up, but xterm extends
-                    //    this to VT100.
-                    //       -> CSI > Pp; Pv; Pc c
-                    //    where Pp denotes the terminal type
-                    //        Pp = 0-> "VT100".
-                    //        Pp = 1-> "VT220".
-                    //        Pp = 2-> "VT240".
-                    //        Pp = 1 8-> "VT330".
-                    //        Pp = 1 9-> "VT340".
-                    //        Pp = 2 4-> "VT320".
-                    //        Pp = 4 1-> "VT420".
-                    //        Pp = 6 1-> "VT510".
-                    //        Pp = 6 4-> "VT520".
-                    //        Pp = 6 5-> "VT525".
-                    //
-                    //    and Pv is the firmware version(for xterm, this was originally
-                    //
-                    //    the XFree86 patch number, starting with 95).In a DEC termi -
-                    //    nal, Pc indicates the ROM cartridge registration number and is
-                    //    always zero.
-                    break;
                 default:
-                    Debug.WriteLine("See Unhandled: CSI - Command: DA, " + _parameter + " c");
+                    Debug.WriteLine("Unhandled Primary DA: " + _parameter);
                     break;
             }
         }
@@ -616,28 +813,112 @@ namespace libVT100
 
         protected override void ProcessCommandOSC(string parameters, string terminator)
         {
-            deb($"<OSC:{parameters},{terminator}>");
+            deb($"[XTERM:OSC({parameters})]");
 
             var parts = parameters.Split(new char[] { ';' }, 2);
+            string oscCmd = parts[0];
+            string oscParam = parts.Length > 1 ? parts[1] : "";
 
-            switch (parts[0])
+            switch (oscCmd)
             {
                 case "0":
+                    deb($"[XTERM:OSC_ICON_AND_TITLE:{oscParam}]");
                     foreach (IAnsiDecoderClient client in m_listeners)
                     {
-                        client.SetProperty(this, PropertyTypes.IconAndTitle, parts[1]);
+                        client.SetProperty(this, PropertyTypes.IconAndTitle, oscParam);
                     }
                     break;
                 case "1":
+                    deb($"[XTERM:OSC_ICON:{oscParam}]");
                     foreach (IAnsiDecoderClient client in m_listeners)
                     {
-                        client.SetProperty(this, PropertyTypes.IconName, parts[1]);
+                        client.SetProperty(this, PropertyTypes.IconName, oscParam);
                     }
                     break;
                 case "2":
+                    deb($"[XTERM:OSC_TITLE:{oscParam}]");
                     foreach (IAnsiDecoderClient client in m_listeners)
                     {
-                        client.SetProperty(this, PropertyTypes.WindowTitle, parts[1]);
+                        client.SetProperty(this, PropertyTypes.WindowTitle, oscParam);
+                    }
+                    break;
+                case "4":
+                    deb($"[XTERM:OSC_COLOR_PALETTE:{oscParam}]");
+                    break;
+                case "8":
+                    deb($"[KITTY:OSC_HYPERLINK:{oscParam}]");
+                    {
+                        var linkParts = oscParam.Split(';', 2);
+                        string linkParams = linkParts.Length > 0 ? linkParts[0] : "";
+                        string linkUrl = linkParts.Length > 1 ? linkParts[1] : "";
+                        string? linkId = null;
+                        if (!string.IsNullOrEmpty(linkParams))
+                        {
+                            foreach (var p in linkParams.Split(':'))
+                            {
+                                if (p.StartsWith("id=")) linkId = p.Substring(3);
+                            }
+                        }
+                        OnSetHyperlink(linkUrl, linkId);
+                    }
+                    break;
+                case "10":
+                    deb($"[XTERM:OSC_FG_COLOR:{oscParam}]");
+                    if (oscParam == "?")
+                    {
+                        OnOutput(Encoding.ASCII.GetBytes("\x1B]10;rgb:ffff/ffff/ffff\x1B\\"));
+                    }
+                    break;
+                case "11":
+                    deb($"[XTERM:OSC_BG_COLOR:{oscParam}]");
+                    if (oscParam == "?")
+                    {
+                        OnOutput(Encoding.ASCII.GetBytes("\x1B]11;rgb:0000/0000/0000\x1B\\"));
+                    }
+                    break;
+                case "12":
+                    deb($"[KITTY:OSC_CURSOR_COLOR:{oscParam}]");
+                    if (oscParam == "?")
+                    {
+                        OnOutput(Encoding.ASCII.GetBytes("\x1B]12;rgb:ffff/ffff/ffff\x1B\\"));
+                    }
+                    else
+                    {
+                        OnSetCursorColor(ParseColor(oscParam));
+                    }
+                    break;
+                case "112":
+                    deb("[KITTY:OSC_CURSOR_COLOR_RESET]");
+                    OnSetCursorColor(null);
+                    break;
+                case "52":
+                    deb("[XTERM:OSC_CLIPBOARD]");
+                    break;
+                case "99":
+                    deb($"[KITTY:OSC_NOTIFICATION:{oscParam}]");
+                    {
+                        var notifParts = oscParam.Split(';', 2);
+                        string notifParams = notifParts.Length > 0 ? notifParts[0] : "";
+                        string notifBody = notifParts.Length > 1 ? notifParts[1] : "";
+                        OnDesktopNotification(notifParams, notifBody);
+                    }
+                    break;
+                case "104":
+                    deb("[XTERM:OSC_RESET_PALETTE]");
+                    break;
+                case "110":
+                    deb("[XTERM:OSC_RESET_FG]");
+                    break;
+                case "111":
+                    deb("[XTERM:OSC_RESET_BG]");
+                    break;
+                case "133":
+                    deb($"[KITTY:OSC_SHELL_INTEGRATION:{oscParam}]");
+                    {
+                        var shellParts = oscParam.Split(';', 2);
+                        string cmd = shellParts.Length > 0 ? shellParts[0] : "";
+                        string? args = shellParts.Length > 1 ? shellParts[1] : null;
+                        OnShellIntegration(cmd, args);
                     }
                     break;
             }
@@ -645,45 +926,56 @@ namespace libVT100
 
         protected override void ProcessCommandTwo(string terminator)
         {
-            deb($"<C2:{terminator}>");
+            deb($"[C2:{terminator}]");
             switch (terminator)
             {
                 case "D":  // IND (Index down - with scroll)
-                    deb("[IND]");
+                    deb("[ANSI:IND]");
                     OnMoveCursor(Direction.Down, 1, true);
                     return;
                 case "M":  // RI (Reverse Index up - with scroll)
-                    deb("[RI]");
+                    deb("[ANSI:RI]");
                     OnMoveCursor(Direction.Up, 1, true);
                     return;
                 case "E":  // NEL (Next Line - with scroll)
-                    deb("[NEL]");
+                    deb("[ANSI:NEL]");
                     OnMoveCursorToBeginningOfLineBelow(1, true);
                     return;
-                case "H":  // Tab Set(HTS  is 0x88). - need to handle the 8 bit version of this
-                    deb("[HTS]");
+                case "H":  // Tab Set (HTS)
+                    deb("[ANSI:HTS]");
                     SetTab();
                     break;
-                case "=":  // ESC =     Application Keypad (DECKPAM).
-                    deb("[DECKPAM]");
+                case "=":  // ESC = Application Keypad (DECKPAM)
+                    deb("[DEC:DECKPAM]");
                     OnModeChanged(AnsiMode.ApplicationKeypad_DECKPAM);
                     break;
-                case ">":  // ESC >     Normal Keypad (DECKPNM), VT100.
-                    deb("[DECKPNM]");
+                case ">":  // ESC > Normal Keypad (DECKPNM)
+                    deb("[DEC:DECKPNM]");
                     OnModeChanged(AnsiMode.NormalKeypad_DECKPNM);
                     break;
-                case "c": // ESC c     Full Reset (RIS), VT100.
-                    deb("[RIS]");
-                    OnClearScreen(ClearDirection.Both);
+                case "c":  // ESC c Full Reset (RIS)
+                    deb("[DEC:RIS]");
+                    OnReset(false);
+                    break;
+                case "7":  // ESC 7 Save Cursor (DECSC)
+                    deb("[DEC:DECSC]");
+                    OnSaveCursor();
+                    break;
+                case "8":  // ESC 8 Restore Cursor (DECRC)
+                    deb("[DEC:DECRC]");
+                    OnRestoreCursor();
+                    break;
+                case "l":  // ESC l Memory Lock (locks display above cursor)
+                    deb("[DEC:MEM_LOCK]");
+                    OnLockMemory(true);
+                    break;
+                case "m":  // ESC m Memory Unlock (clears memory lock)
+                    deb("[DEC:MEM_UNLOCK]");
+                    OnLockMemory(false);
                     break;
 
-                case "7":
-                    // Save cursor position
-                case "8":
-                    // Restore cursor position
-
                 default:
-                    deb("[BAD!]");
+                    deb($"[UNHANDLED:C2:{terminator}]");
                     Debug.WriteLine("Unimplemented TwoLetter: Term=" + terminator);
                     break;
             }
@@ -695,7 +987,7 @@ namespace libVT100
 
             switch (parameters)
             {
-                case "(":  // Set G0 Character Set (there are lots)
+                case "(":  // Set G0 Character Set
                     switch (terminator)
                     {
                         case "A":
@@ -713,22 +1005,23 @@ namespace libVT100
                             return;
                     }
 
-            }
-
-            switch (parameters)
-            {
-                case ")":  // Set G0 Character Set (there are lots)
+                case ")":  // Set G1 Character Set
                     switch (terminator)
                     {
+                        case "A":
+                            OnModeChanged(AnsiMode.SwitchG1toVT100_UK);
+                            return;
+                        case "B":
+                            OnModeChanged(AnsiMode.SwitchG1toVT100_US);
+                            return;
                         case "0":
-                            OnModeChanged(AnsiMode.SwitchG0toVT100_US);
+                            OnModeChanged(AnsiMode.SwitchG1toVT100_LineDrawing);
                             return;
                         default:
                             deb("[BAD!]");
-                            Debug.WriteLine("Unimplemented G0 Character set: " + terminator);
+                            Debug.WriteLine("Unimplemented G1 Character set: " + terminator);
                             return;
                     }
-
             }
 
             deb("[BAD!]");
@@ -767,6 +1060,197 @@ namespace libVT100
             }
             
         }
+        protected override void ProcessCommandAPC(string parameters, string terminator)
+        {
+            deb($"[APC:{parameters}]");
+            if (string.IsNullOrEmpty(parameters)) return;
+
+            if (parameters.StartsWith("V"))
+            {
+                ProcessOobApc(parameters.Substring(1));
+            }
+            else if (parameters.StartsWith("G"))
+            {
+                ProcessKittyGraphicsApc(parameters.Substring(1));
+            }
+        }
+
+        private void ProcessOobApc(string content)
+        {
+            int semiIdx = content.IndexOf(';');
+            string headerPart = semiIdx >= 0 ? content.Substring(0, semiIdx) : content;
+            string payloadChunk = semiIdx >= 0 ? content.Substring(semiIdx + 1) : string.Empty;
+
+            if (!OobHeader.TryParse(headerPart, out var header, out var error))
+            {
+                deb($"[OOB:PARSE_ERROR:{error}]");
+                return;
+            }
+
+            deb($"[OOB:CHUNK(a={header.Action},i={header.Id},m={header.IsMore},t={header.PayloadType})]");
+
+            if (m_oobReassembler.ProcessChunk(header, payloadChunk, out var packet, out var reassemblyError))
+            {
+                if (packet != null)
+                {
+                    deb($"[OOB:PACKET_COMPLETE(a={packet.Header.Action},i={packet.Header.Id},len={packet.Payload.Length})]");
+                    DispatchOobPacket(packet);
+                }
+            }
+            else if (!string.IsNullOrEmpty(reassemblyError))
+            {
+                deb($"[OOB:REASSEMBLY_ERROR:{reassemblyError}]");
+            }
+        }
+
+        private void ProcessKittyGraphicsApc(string content)
+        {
+            int semiIdx = content.IndexOf(';');
+            string controlsPart = semiIdx >= 0 ? content.Substring(0, semiIdx) : content;
+            string payloadChunk = semiIdx >= 0 ? content.Substring(semiIdx + 1) : string.Empty;
+
+            if (!KittyGraphicsCommand.TryParse(controlsPart, out var cmd, out var error))
+            {
+                deb($"[KITTY:GFX_PARSE_ERROR:{error}]");
+                return;
+            }
+
+            deb($"[KITTY:GFX_CHUNK(a={cmd.Action},i={cmd.ImageId},p={cmd.PlacementId},f={cmd.Format},m={cmd.IsMore})]");
+
+            if (cmd.Action == 'q')
+            {
+                deb($"[KITTY:GFX_QUERY({cmd.ImageId})]");
+                if (cmd.QuietMode == 0)
+                {
+                    OnOutput(Encoding.ASCII.GetBytes($"\x1B_Gi={cmd.ImageId};OK\x1B\\"));
+                }
+                foreach (IAnsiDecoderClient client in m_listeners)
+                {
+                    client.KittyGraphicsCommand(this, cmd);
+                }
+                return;
+            }
+
+            if (m_kittyGfxReassembler.ProcessChunk(cmd, payloadChunk, out var completeCmd, out var gfxError))
+            {
+                if (completeCmd != null)
+                {
+                    deb($"[KITTY:GFX_COMPLETE(a={completeCmd.Action},i={completeCmd.ImageId})]");
+                    foreach (IAnsiDecoderClient client in m_listeners)
+                    {
+                        client.KittyGraphicsCommand(this, completeCmd);
+                    }
+                }
+            }
+            else if (!string.IsNullOrEmpty(gfxError))
+            {
+                deb($"[KITTY:GFX_ERROR:{gfxError}]");
+                if (cmd.QuietMode != 2)
+                {
+                    OnOutput(Encoding.ASCII.GetBytes($"\x1B_Gi={cmd.ImageId};EINVAL:{gfxError}\x1B\\"));
+                }
+            }
+        }
+
+        private void DispatchOobPacket(OobPacket packet)
+        {
+            OobPacketReceived?.Invoke(this, new OobPacketEventArgs(packet));
+
+            lock (m_globalOobHandlers)
+            {
+                foreach (var handler in m_globalOobHandlers)
+                {
+                    try { handler.HandlePacket(packet.Header, packet.Payload); }
+                    catch (Exception ex) { Debug.WriteLine("OOB handler exception: " + ex.Message); }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(packet.Header.Action))
+            {
+                lock (m_actionOobHandlers)
+                {
+                    if (m_actionOobHandlers.TryGetValue(packet.Header.Action, out var list))
+                    {
+                        foreach (var handler in list)
+                        {
+                            try { handler.HandlePacket(packet.Header, packet.Payload); }
+                            catch (Exception ex) { Debug.WriteLine("OOB handler exception: " + ex.Message); }
+                        }
+                    }
+                }
+            }
+        }
+
+        public void RegisterOobHandler(IOobPacketHandler handler)
+        {
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            lock (m_globalOobHandlers)
+            {
+                if (!m_globalOobHandlers.Contains(handler))
+                    m_globalOobHandlers.Add(handler);
+            }
+        }
+
+        public void RegisterOobHandler(string action, IOobPacketHandler handler)
+        {
+            if (string.IsNullOrEmpty(action)) throw new ArgumentNullException(nameof(action));
+            if (handler == null) throw new ArgumentNullException(nameof(handler));
+            lock (m_actionOobHandlers)
+            {
+                if (!m_actionOobHandlers.TryGetValue(action, out var list))
+                {
+                    list = new List<IOobPacketHandler>();
+                    m_actionOobHandlers[action] = list;
+                }
+                if (!list.Contains(handler))
+                    list.Add(handler);
+            }
+        }
+
+        public void RegisterOobHandler(string action, Action<OobHeader, byte[]> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            RegisterOobHandler(action, new DelegateOobHandler(callback));
+        }
+
+        public void UnregisterOobHandler(IOobPacketHandler handler)
+        {
+            if (handler == null) return;
+            lock (m_globalOobHandlers)
+            {
+                m_globalOobHandlers.Remove(handler);
+            }
+            lock (m_actionOobHandlers)
+            {
+                foreach (var list in m_actionOobHandlers.Values)
+                {
+                    list.Remove(handler);
+                }
+            }
+        }
+
+        public void SendOobPacket(
+            string action,
+            string? id = null,
+            string? type = null,
+            ReadOnlySpan<byte> payload = default,
+            int maxChunkSize = 4096,
+            string encoding = "b64",
+            int status = 0,
+            IDictionary<string, string>? customHeaders = null)
+        {
+            OobPacketEncoder.SendOobPacket(
+                chunk => OnOutput(chunk),
+                action, id, type, payload, maxChunkSize, encoding, status, customHeaders);
+        }
+
+        private sealed class DelegateOobHandler : IOobPacketHandler
+        {
+            private readonly Action<OobHeader, byte[]> _callback;
+            public DelegateOobHandler(Action<OobHeader, byte[]> callback) => _callback = callback;
+            public void HandlePacket(OobHeader header, ReadOnlySpan<byte> payload) => _callback(header, payload.ToArray());
+        }
+
 
         protected override bool IsValidOneCharacterCommand(char _command)
         {
@@ -929,6 +1413,444 @@ namespace libVT100
                 client.ClearTab(this, ClearAll);
             }
         }
+
+        protected virtual void OnSetScrollingRegion(int top, int bottom)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetScrollingRegion(this, top, bottom);
+            }
+        }
+
+        protected virtual void OnInsertLine(int count)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.InsertLine(this, count);
+            }
+        }
+
+        protected virtual void OnDeleteLine(int count)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.DeleteLine(this, count);
+            }
+        }
+
+        protected virtual void OnInsertCharacter(int count)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.InsertCharacter(this, count);
+            }
+        }
+
+        protected virtual void OnDeleteCharacter(int count)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.DeleteCharacter(this, count);
+            }
+        }
+
+        protected virtual void OnReset(bool soft)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.Reset(this, soft);
+            }
+        }
+        private void DoCSI_SGR(string parameter)
+        {
+            deb($"[ANSI:SGR({parameter})]");
+
+            if (string.IsNullOrEmpty(parameter))
+            {
+                OnSetGraphicRendition(new[] { GraphicRendition.Reset });
+                OnResetColor(true);
+                OnResetColor(false);
+                return;
+            }
+
+            string normalized = parameter.Replace(':', ';');
+            string[] rawTokens = normalized.Split(';');
+            List<string> tokens = new List<string>();
+            foreach (var t in rawTokens)
+            {
+                if (!string.IsNullOrEmpty(t))
+                    tokens.Add(t);
+            }
+
+            List<GraphicRendition> commands = new List<GraphicRendition>();
+
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                int val = DecodeInt(tokens[i], 0);
+
+                if (val == 4 && parameter.Contains("4:"))
+                {
+                    if (parameter.Contains("4:3"))
+                    {
+                        deb("[KITTY:UNDERLINE_STYLE(Curly)]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.Curly);
+                    }
+                    else if (parameter.Contains("4:4"))
+                    {
+                        deb("[KITTY:UNDERLINE_STYLE(Dotted)]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.Dotted);
+                    }
+                    else if (parameter.Contains("4:5"))
+                    {
+                        deb("[KITTY:UNDERLINE_STYLE(Dashed)]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.Dashed);
+                    }
+                    else if (parameter.Contains("4:2"))
+                    {
+                        deb("[ANSI:UNDERLINE_DOUBLE]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.Double);
+                    }
+                    else if (parameter.Contains("4:0"))
+                    {
+                        deb("[ANSI:NO_UNDERLINE]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.None);
+                    }
+                    else
+                    {
+                        deb("[ANSI:UNDERLINE_SINGLE]");
+                        OnSetUnderlineStyle(TerminalFrameBuffer.Underline.Single);
+                    }
+                    if (i + 1 < tokens.Count && int.TryParse(tokens[i + 1], out int sub) && sub >= 0 && sub <= 5)
+                        i++;
+                    continue;
+                }
+
+                if (val == 38)
+                {
+                    if (i + 1 < tokens.Count)
+                    {
+                        int mode = DecodeInt(tokens[i + 1], 0);
+                        if (mode == 5 && i + 2 < tokens.Count)
+                        {
+                            int colorIdx = DecodeInt(tokens[i + 2], 0);
+                            deb($"[XTERM:COLOR_256_FG({colorIdx})]");
+                            OnSetColor256(true, colorIdx);
+                            i += 2;
+                            continue;
+                        }
+                        else if (mode == 2 && i + 4 < tokens.Count)
+                        {
+                            int r = Math.Clamp(DecodeInt(tokens[i + 2], 0), 0, 255);
+                            int g = Math.Clamp(DecodeInt(tokens[i + 3], 0), 0, 255);
+                            int b = Math.Clamp(DecodeInt(tokens[i + 4], 0), 0, 255);
+                            deb($"[XTERM:COLOR_RGB_FG({r},{g},{b})]");
+                            OnSetColorRgb(true, Color.FromArgb(r, g, b));
+                            i += 4;
+                            continue;
+                        }
+                    }
+                }
+                else if (val == 48)
+                {
+                    if (i + 1 < tokens.Count)
+                    {
+                        int mode = DecodeInt(tokens[i + 1], 0);
+                        if (mode == 5 && i + 2 < tokens.Count)
+                        {
+                            int colorIdx = DecodeInt(tokens[i + 2], 0);
+                            deb($"[XTERM:COLOR_256_BG({colorIdx})]");
+                            OnSetColor256(false, colorIdx);
+                            i += 2;
+                            continue;
+                        }
+                        else if (mode == 2 && i + 4 < tokens.Count)
+                        {
+                            int r = Math.Clamp(DecodeInt(tokens[i + 2], 0), 0, 255);
+                            int g = Math.Clamp(DecodeInt(tokens[i + 3], 0), 0, 255);
+                            int b = Math.Clamp(DecodeInt(tokens[i + 4], 0), 0, 255);
+                            deb($"[XTERM:COLOR_RGB_BG({r},{g},{b})]");
+                            OnSetColorRgb(false, Color.FromArgb(r, g, b));
+                            i += 4;
+                            continue;
+                        }
+                    }
+                }
+                else if (val == 58)
+                {
+                    if (i + 1 < tokens.Count)
+                    {
+                        int mode = DecodeInt(tokens[i + 1], 0);
+                        if (mode == 5 && i + 2 < tokens.Count)
+                        {
+                            int colorIdx = DecodeInt(tokens[i + 2], 0);
+                            Color c = TerminalFrameBuffer.Get256Color(colorIdx);
+                            deb($"[KITTY:UNDERLINE_COLOR_256({colorIdx})]");
+                            OnSetUnderlineColor(c);
+                            i += 2;
+                            continue;
+                        }
+                        else if (mode == 2 && i + 4 < tokens.Count)
+                        {
+                            int r = Math.Clamp(DecodeInt(tokens[i + 2], 0), 0, 255);
+                            int g = Math.Clamp(DecodeInt(tokens[i + 3], 0), 0, 255);
+                            int b = Math.Clamp(DecodeInt(tokens[i + 4], 0), 0, 255);
+                            deb($"[KITTY:UNDERLINE_COLOR_RGB({r},{g},{b})]");
+                            OnSetUnderlineColor(Color.FromArgb(r, g, b));
+                            i += 4;
+                            continue;
+                        }
+                    }
+                }
+                else if (val == 59)
+                {
+                    deb("[KITTY:UNDERLINE_COLOR_RESET]");
+                    OnSetUnderlineColor(null);
+                    continue;
+                }
+                else if (val == 39)
+                {
+                    deb("[ANSI:SGR_DEFAULT_FG]");
+                    OnResetColor(true);
+                    continue;
+                }
+                else if (val == 49)
+                {
+                    deb("[ANSI:SGR_DEFAULT_BG]");
+                    OnResetColor(false);
+                    continue;
+                }
+                else if (val == 9)
+                {
+                    deb("[ANSI:SGR_STRIKETHROUGH]");
+                    OnModeChanged(AnsiMode.Strikethrough);
+                    continue;
+                }
+                else if (val == 29)
+                {
+                    deb("[ANSI:SGR_NO_STRIKETHROUGH]");
+                    OnModeChanged(AnsiMode.NoStrikethrough);
+                    continue;
+                }
+                else if (val == 53)
+                {
+                    deb("[ANSI:SGR_OVERLINE]");
+                    OnModeChanged(AnsiMode.Overline);
+                    continue;
+                }
+                else if (val == 55)
+                {
+                    deb("[ANSI:SGR_NO_OVERLINE]");
+                    OnModeChanged(AnsiMode.NoOverline);
+                    continue;
+                }
+                else if (val == 0)
+                {
+                    deb("[ANSI:SGR_RESET]");
+                    commands.Add(GraphicRendition.Reset);
+                    OnResetColor(true);
+                    OnResetColor(false);
+                    OnSetUnderlineColor(null);
+                    OnSetUnderlineStyle(TerminalFrameBuffer.Underline.None);
+                    OnModeChanged(AnsiMode.NoStrikethrough);
+                    OnModeChanged(AnsiMode.NoOverline);
+                }
+                else
+                {
+                    commands.Add((GraphicRendition)val);
+                }
+            }
+
+            if (commands.Count > 0)
+            {
+                OnSetGraphicRendition(commands.ToArray());
+            }
+        }
+
+        protected virtual void OnMoveCursorToRow(int rowNumber)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.MoveCursorToRow(this, rowNumber);
+            }
+        }
+
+        protected virtual void OnMoveCursorBackTab(int tabCount)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.MoveCursorBackTab(this, tabCount);
+            }
+        }
+
+        protected virtual void OnRepeatCharacter(int count)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.RepeatCharacter(this, count);
+            }
+        }
+
+        protected virtual void OnSetLeftRightMargins(int left, int right)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetLeftRightMargins(this, left, right);
+            }
+        }
+
+        protected virtual void OnClearSavedLines()
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.ClearSavedLines(this);
+            }
+        }
+
+        protected virtual void OnSetColor256(bool isForeground, int colorIndex)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetColor256(this, isForeground, colorIndex);
+            }
+        }
+
+        protected virtual void OnSetColorRgb(bool isForeground, Color color)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetColorRgb(this, isForeground, color);
+            }
+        }
+
+        protected virtual void OnResetColor(bool isForeground)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.ResetColor(this, isForeground);
+            }
+        }
+
+        protected virtual void OnPushTitle()
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.PushTitle(this);
+            }
+        }
+
+        protected virtual void OnPopTitle()
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.PopTitle(this);
+            }
+        }
+
+        protected virtual Size OnGetSize()
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                Size sz = client.GetSize(this);
+                if (!sz.IsEmpty) return sz;
+            }
+            return new Size(80, 24);
+        }
+        protected virtual void OnLockMemory(bool lockAbove)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.LockMemory(this, lockAbove);
+            }
+        }
+        protected virtual void OnSetUnderlineStyle(TerminalFrameBuffer.Underline style)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetUnderlineStyle(this, style);
+            }
+        }
+
+        protected virtual void OnSetUnderlineColor(Color? color)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetUnderlineColor(this, color);
+            }
+        }
+
+        protected virtual void OnSetCursorShape(TerminalFrameBuffer.CursorShape shape, bool blinking)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetCursorShape(this, shape, blinking);
+            }
+        }
+
+        protected virtual void OnSetCursorColor(Color? color)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetCursorColor(this, color);
+            }
+        }
+
+        protected virtual void OnSetHyperlink(string? url, string? id)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.SetHyperlink(this, url, id);
+            }
+        }
+
+        protected virtual void OnDesktopNotification(string notificationParams, string body)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.DesktopNotification(this, notificationParams, body);
+            }
+        }
+
+        protected virtual void OnShellIntegration(string command, string? args)
+        {
+            foreach (IAnsiDecoderClient client in m_listeners)
+            {
+                client.ShellIntegration(this, command, args);
+            }
+        }
+
+        private static Color? ParseColor(string spec)
+        {
+            if (string.IsNullOrEmpty(spec)) return null;
+            if (spec.StartsWith("rgb:") && spec.Length >= 18)
+            {
+                var rgbParts = spec.Substring(4).Split('/');
+                if (rgbParts.Length == 3 &&
+                    int.TryParse(rgbParts[0].Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out int r) &&
+                    int.TryParse(rgbParts[1].Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out int g) &&
+                    int.TryParse(rgbParts[2].Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out int b))
+                {
+                    return Color.FromArgb(r, g, b);
+                }
+            }
+            if (spec.StartsWith("#") && spec.Length == 7 &&
+                int.TryParse(spec.Substring(1, 2), System.Globalization.NumberStyles.HexNumber, null, out int hr) &&
+                int.TryParse(spec.Substring(3, 2), System.Globalization.NumberStyles.HexNumber, null, out int hg) &&
+                int.TryParse(spec.Substring(5, 2), System.Globalization.NumberStyles.HexNumber, null, out int hb))
+            {
+                return Color.FromArgb(hr, hg, hb);
+            }
+            try
+            {
+                return Color.FromName(spec);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+
+
         protected void SetTab()
         {
             foreach (IAnsiDecoderClient client in m_listeners)
@@ -989,7 +1911,8 @@ namespace libVT100
                         r[2] = (byte)'D';
                         break;
                     default:
-                        throw new ArgumentException("unknown cursor key code", "key");
+                        Console.Error.WriteLine($"[libvt100:WARN] Unknown cursor key code: {_key}");
+                        return false;
                 }
                 OnOutput(r);
                 return true;
@@ -1026,10 +1949,6 @@ namespace libVT100
                 }
                 else if (_key == Keys.Enter)
                 {
-                    //return new byte[] { 0x1B, (byte) 'M', (byte) '~' };
-                    //r[1] = (byte) 'O';
-                    //r[2] = (byte) 'M';
-                    //return new byte[] { (byte) '\r', (byte) '\n' };
                     r = new byte[] { 13 };
                 }
                 else if (_key == Keys.Escape)
@@ -1062,7 +1981,6 @@ namespace libVT100
         void IDisposable.Dispose()
         {
             m_listeners.Clear();
-            m_listeners = null;
         }
     }
 }
